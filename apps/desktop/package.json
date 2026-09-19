@@ -1,0 +1,11 @@
+{
+  "name":"@gym/desktop",
+  "version":"1.0.0",
+  "private":true,
+  "scripts":{
+    "stage":"node scripts/stage.mjs",
+    "dev":"npm run stage && tauri dev",
+    "build":"npm run stage && tauri build"
+  },
+  "devDependencies":{"@tauri-apps/cli":"^2.11.4"}
+}

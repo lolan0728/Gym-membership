@@ -3,8 +3,8 @@ import ExcelJS from 'exceljs';
 import { randomUUID } from 'node:crypto';
 import { Db } from './db.js';
 import { digest } from './security.js';
-import { createMemberSchema } from './domain.js';
-import { audit, insertMember } from './members.js';
+import { cardRemarkRequired, createMemberSchema } from './domain.js';
+import { audit, insertMember, membershipDurations } from './members.js';
 import { fromBuffer } from 'yauzl';
 export const columns=['姓名','手机号','卡种','开始日期','到期日期','备注','会员档案备注'];
 async function inspectZip(buffer:Buffer) {
@@ -23,12 +23,13 @@ async function inspectZip(buffer:Buffer) {
 export class ImportsService {
   constructor(@Inject(Db) private db:Db) {}
   async template() {
+    const durations=await membershipDurations(this.db);
     const workbook=new ExcelJS.Workbook(),sheet=workbook.addWorksheet('会员导入');
     sheet.addRow(columns);sheet.views=[{state:'frozen',ySplit:1}];
     sheet.getRow(1).font={bold:true,color:{argb:'FFFFFFFF'}};sheet.getRow(1).fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF173F35'}};
     sheet.columns.forEach((c,i)=>{c.width=[18,20,12,18,18,32,32][i];c.numFmt='@';});
     for(let i=2;i<=2001;i++)sheet.getCell(`C${i}`).dataValidation={type:'list',allowBlank:true,formulae:['"年卡,月卡"']};
-    sheet.getCell('A1').note='每行一名会员。日期请填写 YYYY-MM-DD。不要修改表头。最多 2000 名会员。期限偏离月卡 30 天或年卡 365 天时，必须填写备注。';
+    sheet.getCell('A1').note=`每行一名会员。日期请填写 YYYY-MM-DD。不要修改表头。最多 2000 名会员。期限偏离月卡 ${durations.monthCardDays} 天或年卡 ${durations.yearCardDays} 天时，必须填写备注。`;
     return Buffer.from(await workbook.xlsx.writeBuffer());
   }
   async preview(buffer:Buffer) {
@@ -42,7 +43,7 @@ export class ImportsService {
     if(workbook.worksheets.length!==1)throw new BadRequestException('工作簿必须只有一张会员数据表');
     const sheet=workbook.worksheets[0];
     if(sheet.rowCount>2001||sheet.columnCount>7)throw new BadRequestException('每批最多 2000 名会员，且只允许模板中的 7 列');
-    const errors:{row:number;message:string}[]=[],rows:any[]=[];
+    const errors:{row:number;message:string}[]=[],rows:any[]=[],durations=await membershipDurations(this.db);
     const text=(cell:ExcelJS.Cell,row:number)=>{
       if(cell.value instanceof Date)return cell.value.toISOString().slice(0,10);
       if(cell.value===null||cell.value===undefined)return '';
@@ -57,6 +58,7 @@ export class ImportsService {
       const [name,phone,label,startDate,endDate,cardRemark,note]=cells;
       const parsed=createMemberSchema.safeParse({name,phone,kind:label==='年卡'?'year':label==='月卡'?'month':label,startDate,endDate,cardRemark,note});
       if(!parsed.success){errors.push({row:i,message:parsed.error.issues.map(e=>`${e.path.join('.')}: ${e.message}`).join('；')});continue;}
+      if(cardRemarkRequired(parsed.data.startDate,parsed.data.endDate,parsed.data.kind,durations)&&!parsed.data.cardRemark){errors.push({row:i,message:`期限不是月卡 ${durations.monthCardDays} 天或年卡 ${durations.yearCardDays} 天时，请填写备注`});continue;}
       if(phones.has(phone))errors.push({row:i,message:'文件内手机号重复'});
       phones.add(phone);
       rows.push({row:i,...parsed.data});

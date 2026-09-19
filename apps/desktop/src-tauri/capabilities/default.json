@@ -1,0 +1,7 @@
+{
+  "$schema":"../gen/schemas/desktop-schema.json",
+  "identifier":"default",
+  "description":"悦体健身单机版主窗口权限",
+  "windows":["main"],
+  "permissions":["core:default"]
+}

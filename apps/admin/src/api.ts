@@ -1,8 +1,10 @@
 export interface Card {id:string;kind:'year'|'month';start_date:string;end_date:string;status:'active'|'expired'|'upcoming'|'voided';voided_at:string|null;void_reason?:string;version:number;}
-export interface CardHistory extends Card {event_type:'opened'|'renewed'|'updated'|'voided'|'migrated';selected_kind?:'year'|'month';remark:string;created_at:string;}
-export interface Member {id:string;name:string;phone:string;card_number:string;note:string;theme:string;avatar_key?:string;version:number;bound:boolean;created_at:string;card:Card|null;cardHistory:CardHistory[];}
-export interface Store {name:string;phone:string;hasLogo:boolean;}
+export interface CardHistory extends Card {event_type:'opened'|'renewed'|'updated'|'voided'|'migrated';selected_kind?:'year'|'month';remark:string;duration_days?:number;created_at:string;}
+export interface Member {id:string;name:string;phone:string;card_number:string;note:string;version:number;created_at:string;card:Card|null;cardHistory:CardHistory[];}
+export interface Store {name:string;phone:string;monthCardDays:number;yearCardDays:number;hasLogo:boolean;}
 export interface ImportBatch {id:string;status:string;count:number;rows:any[];errors:{row:number;message:string}[];created_at?:string;committedAt?:string;}
+export interface BackupJob {id:string;filePath:string;fileName:string;dataRevision:number;status:'local_saved'|'sent'|'email_failed';error:string;createdAt:string;sentAt?:string;}
+export interface BackupSettings {directory:string;senderEmail:string;recipientEmail:string;scheduleTime:string;retentionCount:number;latest:BackupJob|null;}
 export async function api<T=any>(path:string,options:RequestInit={}):Promise<T>{
   const headers=new Headers(options.headers);headers.set('x-gym-request','1');
   if(options.body&&!(options.body instanceof FormData))headers.set('content-type','application/json');
@@ -15,6 +17,11 @@ export async function api<T=any>(path:string,options:RequestInit={}):Promise<T>{
 export const post=<T=any>(path:string,body:unknown={})=>api<T>(path,{method:'POST',body:JSON.stringify(body)});
 export const patch=<T=any>(path:string,body:unknown)=>api<T>(path,{method:'PATCH',body:JSON.stringify(body)});
 export async function upload<T=any>(path:string,file:File){const form=new FormData();form.append('file',file);return api<T>(path,{method:'POST',body:form});}
+export async function desktopInvoke<T=any>(command:string,args:Record<string,unknown>={}):Promise<T>{
+  const tauri=(window as any).__TAURI_INTERNALS__;
+  if(!tauri)throw new Error('此功能只能在悦体健身桌面程序中使用');
+  const {invoke}=await import('@tauri-apps/api/core');return invoke<T>(command,args);
+}
 export async function download(path:string,name:string){
   const response=await fetch(`/api${path}`,{credentials:'same-origin'});
   if(!response.ok){const e=await response.json().catch(()=>({message:'下载失败'}));throw new Error(e.message);}

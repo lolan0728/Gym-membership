@@ -4,16 +4,18 @@ import { NestFactory, APP_GUARD } from '@nestjs/core';
 import { Module, Catch, ExceptionFilter, ArgumentsHost, HttpException, Logger } from '@nestjs/common';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
+import express from 'express';
+import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import { Db } from './db.js';
 import { AuthGuard, AuthService } from './auth.js';
-import { WechatService } from './wechat.js';
 import { MembersService } from './members.js';
 import { ImportsService } from './imports.js';
 import { StorageService } from './storage.js';
-import { PublicController, AdminController, MemberController } from './controllers.js';
+import { PublicController, AdminController, DesktopController } from './controllers.js';
+import { BackupsService } from './backups.js';
 import { checkConfig, production } from './config.js';
 @Catch()
 export class ErrorFilter implements ExceptionFilter {
@@ -25,12 +27,17 @@ export class ErrorFilter implements ExceptionFilter {
     response.status(status).json({statusCode:status,message,requestId:id});
   }
 }
-@Module({controllers:[PublicController,AdminController,MemberController],providers:[Db,AuthService,WechatService,MembersService,ImportsService,StorageService,{provide:APP_GUARD,useClass:AuthGuard}]})
+@Module({controllers:[PublicController,AdminController,DesktopController],providers:[Db,AuthService,MembersService,ImportsService,StorageService,BackupsService,{provide:APP_GUARD,useClass:AuthGuard}]})
 export class AppModule {}
 export async function createApp(){
   checkConfig();const app=await NestFactory.create(AppModule,{logger:process.env.NODE_ENV==='test'?false:['error','warn','log']});
   app.getHttpAdapter().getInstance().set('trust proxy',production()?1:'loopback');
-  app.use(helmet());app.use(cookieParser());app.use((req:any,res:any,next:any)=>{res.setHeader('Cache-Control','no-store');next();});
+  app.use(helmet({contentSecurityPolicy:false}));app.use(cookieParser());app.use((req:any,res:any,next:any)=>{res.setHeader('Cache-Control','no-store');next();});
+  const adminDist=process.env.ADMIN_DIST_PATH;
+  if(adminDist&&existsSync(adminDist)){
+    app.use(express.static(adminDist,{index:false,maxAge:'1h'}));
+    app.getHttpAdapter().getInstance().get(/^(?!\/api(?:\/|$)).*/,(_req:any,res:any)=>res.sendFile(resolve(adminDist,'index.html')));
+  }
   app.useGlobalFilters(new ErrorFilter());app.enableShutdownHooks();await app.init();return app;
 }
 if(process.argv[1] && fileURLToPath(import.meta.url)===resolve(process.argv[1]))createApp().then(async app=>{

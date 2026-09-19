@@ -1,0 +1,20 @@
+{
+  "$schema":"https://schema.tauri.app/config/2",
+  "productName":"悦体健身会员管理",
+  "version":"1.0.0",
+  "identifier":"cn.joyfit.membership.desktop",
+  "build":{"frontendDist":"../../admin/dist"},
+  "app":{"windows":[],"security":{"csp":null}},
+  "bundle":{
+    "active":true,
+    "targets":["nsis"],
+    "resources":["resources/runtime/node.exe","resources/server/**/*"],
+    "icon":["icons/32x32.png","icons/128x128.png","icons/icon.ico"],
+    "windows":{"webviewInstallMode":{"type":"downloadBootstrapper","silent":true}},
+    "shortDescription":"悦体健身本地会员管理与Excel自动备份",
+    "longDescription":"悦体健身杭宁府店使用的Windows单机会员管理程序。",
+    "category":"Business",
+    "createUpdaterArtifacts":false
+  },
+  "plugins":{}
+}

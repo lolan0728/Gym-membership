@@ -1,8 +1,25 @@
-# 悦体健身 JOYFIT 会员卡系统
+# 悦体健身 JOYFIT 会员管理系统
+
+当前开发分支提供 Windows 单机版。安装包位于 `output/windows`，无需云服务器、域名、Docker、PostgreSQL或单独安装Node.js。会员数据保存在当前Windows用户的本地应用数据目录，每日导出Excel并可通过QQ邮箱发送。
+
+## Windows 单机版
+
+```powershell
+npm ci
+npm run build:desktop
+```
+
+首次构建还需要 Rust stable 和 Visual Studio 2022 Build Tools（Desktop development with C++）。生成的NSIS安装包在 `apps/desktop/src-tauri/target/release/bundle/nsis`。
+
+安装后首次启动需设置管理员密码、门店信息、月卡/年卡天数和备份邮箱。月卡默认30天，年卡默认365天，修改只影响后续新办和续卡。会员头像、微信绑定和小程序功能不在单机版中启用。
+
+详细操作见 [Windows单机版使用与备份说明](docs/desktop-guide.md)。
+
+## 保留的微信版源码
 
 微信原生小程序、Vue 3 管理后台、NestJS API、PostgreSQL、COS 图片存储与 Docker 部署。会员仅领取已有档案，不自行注册或付款。
 
-## 本机启动
+### 开发环境启动
 
 需要 Node.js 22.12+（推荐 24）。在项目根目录执行：
 

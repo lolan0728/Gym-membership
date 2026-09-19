@@ -22,6 +22,7 @@ export class AuthService {
   async login(password:string,ip:string) {
     await this.limit(`admin-login:${ip}`,10,900);
     const {rows} = await this.db.query('SELECT password_hash FROM administrators WHERE id=1');
+    if(!rows[0])throw new UnauthorizedException('请先完成首次设置');
     if (!await verifyPassword(password,rows[0].password_hash)) throw new UnauthorizedException('密码不正确');
     return this.issue('admin');
   }

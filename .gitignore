@@ -10,3 +10,8 @@ playwright-report/
 *.log
 apps/miniprogram/project.private.config.json
 backups/
+tmp/
+apps/desktop/src-tauri/resources/
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
+output/windows/*.exe

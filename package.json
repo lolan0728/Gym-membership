@@ -5,7 +5,8 @@
   "workspaces": [
     "apps/api",
     "apps/admin",
-    "apps/miniprogram"
+    "apps/miniprogram",
+    "apps/desktop"
   ],
   "scripts": {
     "setup:local": "node scripts/setup-local.mjs",
@@ -13,7 +14,8 @@
     "build": "npm run build -w @gym/api && npm run build -w @gym/admin && npm run check -w @gym/miniprogram",
     "test": "npm run test -w @gym/api",
     "test:ui": "node scripts/ui-test.mjs",
-    "seed:demo": "npm run seed:demo -w @gym/api"
+    "seed:demo": "npm run seed:demo -w @gym/api",
+    "build:desktop": "npm run build -w @gym/desktop"
   },
   "devDependencies": {
     "@playwright/test": "^1.56.0",

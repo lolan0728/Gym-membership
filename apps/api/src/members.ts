@@ -2,10 +2,16 @@ import { BadRequestException, ConflictException, ForbiddenException, Inject, Inj
 import { randomBytes, randomUUID } from 'node:crypto';
 import { AuthRequest } from './auth.js';
 import { Db, Queryable } from './db.js';
-import { cardRemarkRequired, statusOf, todayShanghai } from './domain.js';
+import { cardRemarkRequired, membershipDays, MembershipDurations, statusOf, todayShanghai } from './domain.js';
 
 export async function audit(q:Queryable,action:string,memberId:string|null,detail:unknown,actor='owner') {
   await q.query('INSERT INTO audit_logs(id,member_id,action,actor,detail) VALUES($1,$2,$3,$4,$5)',[randomUUID(),memberId,action,actor,JSON.stringify(detail)]);
+  await q.query('UPDATE desktop_state SET data_revision=data_revision+1,updated_at=now() WHERE id=1');
+}
+
+export async function membershipDurations(q:Queryable):Promise<MembershipDurations>{
+  const row=(await q.query('SELECT month_card_days,year_card_days FROM settings WHERE id=1')).rows[0];
+  return {monthCardDays:Number(row.month_card_days),yearCardDays:Number(row.year_card_days)};
 }
 
 const date=(value:string|Date)=>value instanceof Date?value.toISOString().slice(0,10):value.slice(0,10);
@@ -15,23 +21,25 @@ export function displayCard(card:any) {
   return {...normalized,status:statusOf(normalized)};
 }
 
-async function cardEvent(q:Queryable,memberId:string,eventType:string,card:any,selectedKind?:string,remark='',detail:unknown={}) {
+async function cardEvent(q:Queryable,memberId:string,eventType:string,card:any,selectedKind?:string,remark='',detail:unknown={},durationDays:number|null=null) {
   await q.query(`INSERT INTO membership_events(
-    id,member_id,membership_id,event_type,selected_kind,kind,start_date,end_date,voided_at,void_reason,remark,detail
-  ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,[
+    id,member_id,membership_id,event_type,selected_kind,kind,start_date,end_date,voided_at,void_reason,remark,detail,duration_days
+  ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,[
     randomUUID(),memberId,card.id,eventType,selectedKind||null,card.kind,date(card.start_date),date(card.end_date),
-    card.voided_at||null,card.void_reason||null,remark,JSON.stringify(detail)
+    card.voided_at||null,card.void_reason||null,remark,JSON.stringify(detail),durationDays
   ]);
 }
 
 const displayHistory=(rows:any[])=>rows.map(row=>displayCard(row));
 
 export async function insertMember(q:Queryable,input:any) {
+  const durations=await membershipDurations(q),durationDays=membershipDays(input.kind,durations);
+  if(cardRemarkRequired(input.startDate,input.endDate,input.kind,durations)&&!input.cardRemark)throw new BadRequestException(`期限不是月卡 ${durations.monthCardDays} 天或年卡 ${durations.yearCardDays} 天时，请填写备注`);
   const id=randomUUID(),cardNumber=`GYM${randomBytes(8).toString('hex').toUpperCase()}`,cardId=randomUUID();
   const {rows}=await q.query('INSERT INTO members(id,name,phone,card_number,note) VALUES($1,$2,$3,$4,$5) RETURNING *',[id,input.name,input.phone,cardNumber,input.note||'']);
   const card=(await q.query('INSERT INTO memberships(id,member_id,kind,start_date,end_date) VALUES($1,$2,$3,$4,$5) RETURNING *',[cardId,id,input.kind,input.startDate,input.endDate])).rows[0];
-  await cardEvent(q,id,'opened',card,input.kind,input.cardRemark);
-  await audit(q,'member_created',id,{name:input.name,phone:input.phone,note:input.note||'',kind:input.kind,startDate:input.startDate,endDate:input.endDate,cardRemark:input.cardRemark,cardNumber});
+  await cardEvent(q,id,'opened',card,input.kind,input.cardRemark,{},durationDays);
+  await audit(q,'member_created',id,{name:input.name,phone:input.phone,note:input.note||'',kind:input.kind,startDate:input.startDate,endDate:input.endDate,cardRemark:input.cardRemark,cardNumber,durationDays});
   return rows[0];
 }
 
@@ -46,7 +54,7 @@ export class MembersService {
       (SELECT count(*)::int FROM memberships WHERE voided_at IS NULL AND start_date<=$1 AND end_date>=$1) AS active,
       (SELECT count(*)::int FROM memberships WHERE voided_at IS NULL AND start_date<=$1 AND end_date>=$1
         AND ((kind='year' AND end_date<=$1::date+30) OR (kind='month' AND end_date<=$1::date+7))) AS expiring,
-      (SELECT count(*)::int FROM members m WHERE NOT EXISTS(SELECT 1 FROM wechat_bindings b WHERE b.member_id=m.id)) AS unbound`,[today]);
+      (SELECT count(*)::int FROM memberships WHERE voided_at IS NULL AND end_date<$1) AS expired`,[today]);
     return rows[0];
   }
 
@@ -64,17 +72,17 @@ export class MembersService {
     if(cardConditions.length>1)conditions.push(`EXISTS(SELECT 1 FROM memberships c WHERE ${cardConditions.join(' AND ')})`);
     const where=`WHERE $1::date IS NOT NULL ${conditions.length?'AND '+conditions.join(' AND '):''}`;
     const total=(await this.db.query(`SELECT count(*)::int AS n FROM members m ${where}`,values)).rows[0].n;
-    const {rows}=await this.db.query(`SELECT m.*,EXISTS(SELECT 1 FROM wechat_bindings b WHERE b.member_id=m.id) AS bound,
+    const {rows}=await this.db.query(`SELECT m.id,m.name,m.phone,m.card_number,m.note,m.version,m.created_at,m.updated_at,
       (SELECT to_jsonb(c) FROM memberships c WHERE c.member_id=m.id) AS card
       FROM members m ${where} ORDER BY m.created_at DESC,m.id LIMIT $${values.length+1} OFFSET $${values.length+2}`,[...values,input.pageSize,(input.page-1)*input.pageSize]);
     return {total,items:rows.map(member=>({...member,card:displayCard(member.card)}))};
   }
 
   async detail(id:string) {
-    const {rows}=await this.db.query('SELECT m.*,EXISTS(SELECT 1 FROM wechat_bindings b WHERE b.member_id=m.id) AS bound FROM members m WHERE id=$1',[id]);
+    const {rows}=await this.db.query('SELECT m.id,m.name,m.phone,m.card_number,m.note,m.version,m.created_at,m.updated_at FROM members m WHERE id=$1',[id]);
     if(!rows[0])throw new NotFoundException('会员不存在');
     const card=(await this.db.query('SELECT * FROM memberships WHERE member_id=$1',[id])).rows[0];
-    const history=await this.db.query(`SELECT id,event_type,selected_kind,kind,start_date,end_date,voided_at,void_reason,remark,created_at
+    const history=await this.db.query(`SELECT id,event_type,selected_kind,kind,start_date,end_date,voided_at,void_reason,remark,duration_days,created_at
       FROM membership_events WHERE member_id=$1 ORDER BY created_at DESC,id DESC`,[id]);
     return {...rows[0],card:displayCard(card),cardHistory:displayHistory(history.rows)};
   }
@@ -102,12 +110,13 @@ export class MembersService {
       if(unexpired&&input.startDate!==current.start_date)throw new BadRequestException('未到期续卡必须保持原开始日期，确保有效期连续');
       if(unexpired&&input.endDate<=current.end_date)throw new BadRequestException('续卡后的到期日期必须晚于当前到期日期');
       const renewalBase=unexpired?current.end_date:input.startDate;
-      if(cardRemarkRequired(renewalBase,input.endDate,input.kind)&&!input.remark)throw new BadRequestException('续卡期限不是月卡 30 天或年卡 365 天时，请填写备注');
+      const durations=await membershipDurations(q),durationDays=membershipDays(input.kind,durations);
+      if(cardRemarkRequired(renewalBase,input.endDate,input.kind,durations)&&!input.remark)throw new BadRequestException(`续卡期限不是月卡 ${durations.monthCardDays} 天或年卡 ${durations.yearCardDays} 天时，请填写备注`);
       const kind=unexpired&&before.kind==='year'?'year':input.kind;
       const after=(await q.query(`UPDATE memberships SET kind=$2,start_date=$3,end_date=$4,voided_at=NULL,void_reason=NULL,
         version=version+1,updated_at=now() WHERE id=$1 RETURNING *`,[before.id,kind,input.startDate,input.endDate])).rows[0];
-      await cardEvent(q,memberId,'renewed',after,input.kind,input.remark,{before:current});
-      await audit(q,'card_renewed',memberId,{selectedKind:input.kind,remark:input.remark,before:current,after:displayCard(after)});
+      await cardEvent(q,memberId,'renewed',after,input.kind,input.remark,{before:current},durationDays);
+      await audit(q,'card_renewed',memberId,{selectedKind:input.kind,durationDays,remark:input.remark,before:current,after:displayCard(after)});
       return displayCard(after);
     });
   }

@@ -5,6 +5,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { hashPassword } from './security.js';
+import { desktopMode } from './config.js';
 import './config.js';
 types.setTypeParser(1082, value => value);
 export interface Result<T = any> { rows: T[]; rowCount: number | null }
@@ -19,6 +20,7 @@ export class Db implements Queryable, OnModuleInit, OnModuleDestroy {
     await this.migrate();
     const existing = await this.query('SELECT id FROM administrators WHERE id=1');
     if (!existing.rows.length) {
+      if (desktopMode()) return;
       const password = process.env.ADMIN_INITIAL_PASSWORD;
       if (!password || password.length < 12 || password.includes('REPLACE_')) throw new Error('Set a unique ADMIN_INITIAL_PASSWORD (at least 12 characters) before first start');
       await this.query('INSERT INTO administrators(id,password_hash) VALUES(1,$1) ON CONFLICT DO NOTHING', [await hashPassword(password)]);

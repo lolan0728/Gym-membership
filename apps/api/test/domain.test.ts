@@ -24,7 +24,8 @@ test('Membership duration uses exact calendar-day addition',()=>{
   assert.equal(defaultEndDate('2026-03-01','month'),'2026-03-31');
   assert.equal(cardRemarkRequired('2026-03-01','2026-03-31','month'),false);
   assert.equal(cardRemarkRequired('2026-03-01','2026-04-01','month'),true);
-  assert.equal(createMemberSchema.safeParse({name:'测试',phone:'13900000001',kind:'month',startDate:'2026-03-01',endDate:'2026-04-01'}).success,false);
+  // The schema validates shape; the service validates the configured month/year duration.
+  assert.equal(createMemberSchema.safeParse({name:'测试',phone:'13900000001',kind:'month',startDate:'2026-03-01',endDate:'2026-04-01'}).success,true);
   const parsed=createMemberSchema.parse({name:'测试',phone:'13900000001',kind:'month',startDate:'2026-03-01',endDate:'2026-04-01',cardRemark:'  赠送一天  '});
   assert.equal(parsed.cardRemark,'赠送一天');
 });
