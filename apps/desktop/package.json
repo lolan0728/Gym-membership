@@ -1,11 +1,12 @@
 {
   "name":"@gym/desktop",
-  "version":"1.0.0",
+  "version":"1.0.1",
   "private":true,
   "scripts":{
     "stage":"node scripts/stage.mjs",
     "dev":"npm run stage && tauri dev",
-    "build":"npm run stage && tauri build"
+    "build":"npm run stage && node scripts/build-rust.mjs",
+    "portable":"npm run stage && node scripts/build-rust.mjs --no-bundle && node scripts/portable.mjs"
   },
   "devDependencies":{"@tauri-apps/cli":"^2.11.4"}
 }

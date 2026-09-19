@@ -61,10 +61,11 @@ fn mark_email(state:&DesktopState,id:&str,ok:bool,error:&str){
 fn smtp_password(sender:&str)->Result<String,String>{Entry::new(SMTP_SERVICE,sender).map_err(|e|e.to_string())?.get_password().map_err(|_|"尚未保存QQ邮箱SMTP授权码".to_string())}
 
 fn send_message(settings:&BackupSettings,attachment:Option<&BackupJob>,test:bool)->Result<(),String>{
-    if settings.sender_email.is_empty()||settings.recipient_email.is_empty(){return Err("请先填写发件邮箱和收件邮箱".into())}
+    if settings.sender_email.is_empty(){return Err("请先填写QQ发件邮箱".into())}
     let password=smtp_password(&settings.sender_email)?;
     let from:Mailbox=settings.sender_email.parse().map_err(|_|"QQ发件邮箱格式不正确".to_string())?;
-    let to:Mailbox=settings.recipient_email.parse().map_err(|_|"收件邮箱格式不正确".to_string())?;
+    let recipient=if settings.recipient_email.is_empty(){&settings.sender_email}else{&settings.recipient_email};
+    let to:Mailbox=recipient.parse().map_err(|_|"收件邮箱格式不正确".to_string())?;
     let now=Local::now();
     let subject=if test{"悦体健身自动备份测试邮件".to_string()}else{format!("悦体健身会员数据备份 {}",now.format("%Y-%m-%d %H:%M"))};
     let text=if test{"这是一封测试邮件。悦体健身Windows单机版已经可以使用QQ邮箱发送每日备份。".to_string()}else{format!("悦体健身会员数据已于 {} 完成Excel备份。附件可用于完整数据恢复。",now.format("%Y-%m-%d %H:%M:%S"))};

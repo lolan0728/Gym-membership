@@ -15,3 +15,5 @@ apps/desktop/src-tauri/resources/
 apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/gen/
 output/windows/*.exe
+output/windows/*.zip
+output/windows/*_便携版/

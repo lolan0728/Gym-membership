@@ -42,6 +42,14 @@ test('Desktop API has no WeChat member or avatar routes',async()=>{
   for(const path of ['/me','/me/avatar'])assert.equal((await call(path,'GET',undefined,true)).status,404);
 });
 
+test('Desktop writes accept loopback requests when WebView omits Origin',async()=>{
+  const response=await fetch(base+'/api/admin/settings',{method:'PATCH',headers:{cookie,'x-gym-request':'1','content-type':'application/json'},body:JSON.stringify({name:'悦体健身',phone:'',monthCardDays:30,yearCardDays:365})});
+  assert.equal(response.status,200,await response.text());
+  const backup=await call('/admin/backup/settings','PATCH',{directory:backupDir,senderEmail:'backup@qq.com',recipientEmail:'',scheduleTime:'20:00',retentionCount:30});
+  assert.equal(backup.status,200,JSON.stringify(backup.data));assert.equal(backup.data.recipientEmail,'backup@qq.com');
+  await call('/admin/backup/settings','PATCH',{directory:backupDir,senderEmail:'',recipientEmail:'',scheduleTime:'20:00',retentionCount:30});
+});
+
 test('Configured card durations drive opening, renewal and history snapshots',async()=>{
   const settings=await call('/admin/settings','PATCH',{name:'悦体健身',phone:'13800138000',monthCardDays:45,yearCardDays:400});assert.equal(settings.status,200,JSON.stringify(settings.data));
   const start=todayShanghai();assert.equal((await call('/admin/members','POST',{name:'缺少备注',phone:phone(),kind:'month',startDate:start,endDate:addDays(start,30),cardRemark:'',note:''})).status,400);

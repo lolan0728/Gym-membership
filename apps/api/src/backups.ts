@@ -30,11 +30,12 @@ export class BackupsService {
 
   async updateSettings(input:{directory:string;senderEmail:string;recipientEmail:string;scheduleTime:string;retentionCount:number}){
     const directory=resolve(input.directory.trim()||this.defaultDirectory());
+    const senderEmail=input.senderEmail.trim(),recipientEmail=input.recipientEmail.trim()||senderEmail;
     await mkdir(directory,{recursive:true});
     await this.db.tx(async q=>{
       await q.query(`UPDATE backup_settings SET directory=$1,sender_email=$2,recipient_email=$3,schedule_time=$4,
-        retention_count=$5,updated_at=now() WHERE id=1`,[directory,input.senderEmail.trim(),input.recipientEmail.trim(),input.scheduleTime,input.retentionCount]);
-      await audit(q,'backup_settings_updated',null,{directory,senderEmail:input.senderEmail.trim(),recipientEmail:input.recipientEmail.trim(),scheduleTime:input.scheduleTime,retentionCount:input.retentionCount});
+        retention_count=$5,updated_at=now() WHERE id=1`,[directory,senderEmail,recipientEmail,input.scheduleTime,input.retentionCount]);
+      await audit(q,'backup_settings_updated',null,{directory,senderEmail,recipientEmail,scheduleTime:input.scheduleTime,retentionCount:input.retentionCount});
     });
     return this.settings();
   }

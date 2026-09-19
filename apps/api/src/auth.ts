@@ -2,6 +2,7 @@ import { Injectable, Inject, CanActivate, ExecutionContext, UnauthorizedExceptio
 import { Reflector } from '@nestjs/core';
 import { Request } from 'express';
 import { Db } from './db.js';
+import { desktopMode } from './config.js';
 import { digest, newToken, verifyPassword, hashPassword } from './security.js';
 export const Public = () => SetMetadata('public',true);
 export interface AuthRequest extends Request { auth: { role:string; openid:string | null; tokenHash:string; memberId:string | null } }
@@ -45,7 +46,10 @@ export class AuthGuard implements CanActivate {
     const admin = req.path.startsWith('/api/admin');
     if (admin && !['GET','HEAD','OPTIONS'].includes(req.method)) {
       const expected = process.env.ADMIN_ORIGIN || 'http://localhost:15173';
-      if (req.get('origin') !== expected || req.get('x-gym-request') !== '1') throw new ForbiddenException('请求来源无效，请从管理后台操作');
+      const address=req.socket.remoteAddress||'';
+      const loopback=address==='127.0.0.1'||address==='::1'||address==='::ffff:127.0.0.1';
+      const validSource=desktopMode()?loopback:req.get('origin')===expected;
+      if (!validSource || req.get('x-gym-request') !== '1') throw new ForbiddenException('请求来源无效，请从管理后台操作');
     }
     if (this.reflector.getAllAndOverride<boolean>('public',[context.getHandler(),context.getClass()])) return true;
     const token = admin ? req.cookies?.gym_admin : req.get('authorization')?.replace(/^Bearer /,'');

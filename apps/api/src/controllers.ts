@@ -34,7 +34,7 @@ export class PublicController {
       if((await q.query('SELECT 1 FROM administrators WHERE id=1 FOR UPDATE')).rows.length)throw new BadRequestException('初始化已经完成');
       await q.query('INSERT INTO administrators(id,password_hash) VALUES(1,$1)',[await hashPassword(input.password)]);
       await q.query('UPDATE settings SET name=$1,phone=$2,month_card_days=$3,year_card_days=$4,updated_at=now() WHERE id=1',[input.name,input.phone,input.monthCardDays,input.yearCardDays]);
-      if(input.backupDirectory||input.senderEmail||input.recipientEmail)await q.query('UPDATE backup_settings SET directory=$1,sender_email=$2,recipient_email=$3,updated_at=now() WHERE id=1',[input.backupDirectory,input.senderEmail,input.recipientEmail]);
+      if(input.backupDirectory||input.senderEmail||input.recipientEmail)await q.query('UPDATE backup_settings SET directory=$1,sender_email=$2,recipient_email=$3,updated_at=now() WHERE id=1',[input.backupDirectory,input.senderEmail,input.recipientEmail||input.senderEmail]);
       await audit(q,'desktop_initialized',null,{name:input.name,phone:input.phone,monthCardDays:input.monthCardDays,yearCardDays:input.yearCardDays});
     });return {ok:true};
   }
