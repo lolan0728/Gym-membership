@@ -4,5 +4,5 @@
   "description":"悦体健身单机版主窗口权限",
   "remote":{"urls":["http://127.0.0.1:15273/*"]},
   "windows":["main"],
-  "permissions":["core:default"]
+  "permissions":["core:default","desktop-commands"]
 }

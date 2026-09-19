@@ -1,0 +1,10 @@
+[[permission]]
+identifier = "desktop-commands"
+description = "允许悦体健身主窗口保存邮件凭据并执行本地备份操作。"
+commands.allow = [
+  "save_smtp_credential",
+  "test_backup_email",
+  "run_backup",
+  "choose_backup_directory",
+  "open_backup_directory"
+]
