@@ -1,0 +1,12 @@
+node_modules
+**/node_modules
+**/dist
+.git
+.env
+.env.*
+.local-credentials.txt
+.local-data
+test-results
+backups
+docs
+apps/api/test

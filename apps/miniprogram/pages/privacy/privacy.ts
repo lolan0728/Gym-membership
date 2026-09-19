@@ -1,0 +1,2 @@
+import {request,notify} from '../../utils/api';
+Page({data:{store:{name:'本门店',phone:''}},onLoad(){request('/store','GET',undefined,false).then(store=>this.setData({store})).catch(notify);},official(){wx.openPrivacyContract({fail:()=>notify(new Error('隐私保护指引暂不可用，请联系门店'))});},contact(){if(this.data.store.phone)wx.makePhoneCall({phoneNumber:this.data.store.phone});else notify(new Error('请到店联系前台'));}});

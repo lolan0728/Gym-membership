@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+.local-credentials.txt
+.local-data/
+test-results/
+playwright-report/
+*.log
+apps/miniprogram/project.private.config.json
+backups/

@@ -1,0 +1,5 @@
+{
+  "appid":"touristappid", "projectname":"joyfit-membership", "compileType":"miniprogram", "miniprogramRoot":"./",
+  "setting":{"es6":true,"minified":true,"postcss":true,"urlCheck":true,"useCompilerPlugins":["typescript"]},
+  "packOptions":{"ignore":[{"type":"file","value":"package.json"},{"type":"file","value":"tsconfig.json"},{"type":"folder","value":"node_modules"}]}
+}

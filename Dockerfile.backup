@@ -1,0 +1,13 @@
+FROM node:24-bookworm-slim AS deps
+WORKDIR /deps
+COPY package*.json .npmrc ./
+COPY apps/api/package.json apps/api/package.json
+COPY apps/admin/package.json apps/admin/package.json
+COPY apps/miniprogram/package.json apps/miniprogram/package.json
+RUN npm ci --omit=dev --no-audit --no-fund
+FROM postgres:17-bookworm
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libatomic1 libstdc++6 && rm -rf /var/lib/apt/lists/*
+COPY --from=deps /usr/local/bin/node /usr/local/bin/node
+COPY --from=deps /deps/node_modules /node_modules
+COPY ops/backup.cjs ops/backup-crypto.cjs /ops/
+CMD ["node","/ops/backup.cjs","schedule"]

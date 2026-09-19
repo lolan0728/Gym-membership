@@ -1,0 +1,12 @@
+FROM node:24-bookworm-slim AS build
+WORKDIR /app
+COPY package*.json .npmrc ./
+COPY apps/api/package.json apps/api/package.json
+COPY apps/admin/package.json apps/admin/package.json
+COPY apps/miniprogram/package.json apps/miniprogram/package.json
+RUN npm ci --no-audit --no-fund
+COPY apps/admin apps/admin
+RUN npm run build -w @gym/admin
+FROM caddy:2-alpine
+COPY --from=build /app/apps/admin/dist /srv
+COPY ops/Caddyfile /etc/caddy/Caddyfile

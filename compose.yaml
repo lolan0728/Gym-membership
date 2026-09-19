@@ -1,0 +1,78 @@
+services:
+  db:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_DB: gym
+      POSTGRES_USER: gym
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes: ["postgres_data:/var/lib/postgresql/data"]
+    networks: [private]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gym -d gym"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+  api:
+    build: {context: ., dockerfile: Dockerfile.api}
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      DB_DRIVER: postgres
+      DATABASE_URL: postgresql://gym:${POSTGRES_PASSWORD}@db:5432/gym
+      STORAGE_DRIVER: cos
+      HOST: 0.0.0.0
+      PORT: 3000
+    depends_on: {db: {condition: service_healthy}}
+    networks: [public, private]
+    restart: unless-stopped
+  web:
+    build: {context: ., dockerfile: Dockerfile.web}
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:?Set SITE_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL}
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes: ["caddy_data:/data", "caddy_config:/config"]
+    depends_on: {api: {condition: service_healthy}}
+    networks: [public]
+    restart: unless-stopped
+  backup:
+    build: {context: ., dockerfile: Dockerfile.backup}
+    env_file: .env
+    environment:
+      PGHOST: db
+      PGUSER: gym
+      PGDATABASE: gym
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      BACKUP_STATE_DIR: /state
+      BACKUP_TEMP_DIR: /scratch
+    volumes: ["backup_state:/state"]
+    tmpfs: ["/scratch:mode=0700,size=512m"]
+    depends_on: {api: {condition: service_healthy}}
+    networks: [private, public]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "/ops/backup.cjs", "health"]
+      interval: 5m
+      start_period: 5m
+      timeout: 10s
+      retries: 2
+  monitor:
+    image: node:24-bookworm-slim
+    command: ["node", "/ops/monitor.mjs"]
+    volumes: ["./ops/monitor.mjs:/ops/monitor.mjs:ro", "backup_state:/state:ro"]
+    environment:
+      HEALTH_URL: http://api:3000/api/health
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+    networks: [public]
+    depends_on: [api, backup]
+    restart: unless-stopped
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:
+  backup_state:
+networks:
+  public:
+  private:
+    internal: true

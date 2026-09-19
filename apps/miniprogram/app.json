@@ -1,0 +1,6 @@
+{
+  "pages":["pages/index/index","pages/styles/styles","pages/history/history","pages/privacy/privacy"],
+  "window":{"navigationBarTitleText":"悦体健身会员卡","navigationBarBackgroundColor":"#f7f8f2","navigationBarTextStyle":"black","backgroundColor":"#f7f8f2","backgroundTextStyle":"dark"},
+  "style":"v2","sitemapLocation":"sitemap.json","lazyCodeLoading":"requiredComponents","__usePrivacyCheck__":true,
+  "usingComponents":{"privacy-dialog":"/components/privacy-dialog/index"}
+}

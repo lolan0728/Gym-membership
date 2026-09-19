@@ -1,0 +1,1 @@
+{"desc":"Member pages are private and must not be indexed.","rules":[{"action":"disallow","page":"*"}]}

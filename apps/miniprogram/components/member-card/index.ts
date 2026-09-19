@@ -1,0 +1,1 @@
+Component({properties:{theme:{type:String,value:'gold'},storeName:{type:String,value:''},name:{type:String,value:''},cardNumber:{type:String,value:''},kind:{type:String,value:''},status:{type:String,value:''},statusCode:{type:String,value:''},period:{type:String,value:''}}});
