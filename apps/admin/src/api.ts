@@ -3,8 +3,8 @@ export interface CardHistory extends Card {event_type:'opened'|'renewed'|'update
 export interface Member {id:string;name:string;phone:string;card_number:string;note:string;version:number;created_at:string;card:Card|null;cardHistory:CardHistory[];}
 export interface Store {name:string;phone:string;monthCardDays:number;yearCardDays:number;hasLogo:boolean;}
 export interface ImportBatch {id:string;status:string;count:number;rows:any[];errors:{row:number;message:string}[];created_at?:string;committedAt?:string;}
-export interface BackupJob {id:string;filePath:string;fileName:string;dataRevision:number;status:'local_saved'|'sent'|'email_failed';error:string;createdAt:string;sentAt?:string;}
-export interface BackupSettings {directory:string;senderEmail:string;recipientEmail:string;scheduleTime:string;retentionCount:number;latest:BackupJob|null;}
+export interface BackupJob {id:string;filePath:string;fileName:string;dataRevision:number;status:'local_saved'|'sent'|'email_failed';error:string;triggerSource:'manual'|'automatic'|'pre_restore';scheduledDate?:string;createdAt:string;sentAt?:string;}
+export interface BackupSettings {directory:string;senderEmail:string;recipientEmail:string;scheduleTime:string;retentionCount:number;latest:BackupJob|null;automaticStatus:'waiting'|'completed'|'failed';automaticStatusText:string;today:string;latestAutomaticDate:string|null;initializedDate:string|null;}
 export async function api<T=any>(path:string,options:RequestInit={}):Promise<T>{
   const headers=new Headers(options.headers);headers.set('x-gym-request','1');
   if(options.body&&!(options.body instanceof FormData))headers.set('content-type','application/json');
@@ -32,3 +32,6 @@ export const kindLabel=(kind:string)=>kind==='year'?'年卡':'月卡';
 export function mainCard(member:Member):Card|undefined{return member.card||undefined;}
 export const day=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
 export function addDays(date:string,days:number){const value=new Date(`${date}T00:00:00Z`);value.setUTCDate(value.getUTCDate()+days);return value.toISOString().slice(0,10);}
+const beijingDateTime=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'});
+export function formatDateTime(value:string|Date){const p=Object.fromEntries(beijingDateTime.formatToParts(value instanceof Date?value:new Date(value)).map(x=>[x.type,x.value]));return `${p.year}/${p.month}/${p.day} ${p.hour}:${p.minute}:${p.second}`;}
+export function formatDate(value:string){return value.slice(0,10).replaceAll('-','/');}

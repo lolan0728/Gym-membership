@@ -9,6 +9,9 @@ import {createApp} from '../src/main.js';
 import {Db} from '../src/db.js';
 import {columns} from '../src/imports.js';
 import {addDays,todayShanghai} from '../src/domain.js';
+import {BackupsService} from '../src/backups.js';
+import {OperationLogsService} from '../src/operation-logs.js';
+import {beijingMonth} from '../src/time.js';
 
 let app:Awaited<ReturnType<typeof createApp>>,db:Db,base:string,cookie:string,dataDir:string,backupDir:string;
 const password='Desktop-Test-Password-123';let sequence=0;
@@ -24,7 +27,7 @@ async function preview(buffer:Buffer){const f=new FormData();f.append('file',new
 
 before(async()=>{
   process.env.NODE_ENV='test';process.env.DESKTOP_MODE='true';process.env.DB_DRIVER='pglite';process.env.PGLITE_PATH='memory://';process.env.STORAGE_DRIVER='local';process.env.DESKTOP_CONTROL_TOKEN='test-control-token';
-  dataDir=await mkdtemp(join(tmpdir(),'joyfit-test-'));backupDir=join(dataDir,'backups');process.env.LOCAL_STORAGE_PATH=join(dataDir,'uploads');process.env.JOYFIT_BACKUP_PATH=backupDir;
+  dataDir=await mkdtemp(join(tmpdir(),'joyfit-test-'));backupDir=join(dataDir,'backups');process.env.LOCAL_STORAGE_PATH=join(dataDir,'uploads');process.env.JOYFIT_BACKUP_PATH=backupDir;process.env.JOYFIT_OPERATION_LOG_PATH=join(dataDir,'logs');
   app=await createApp();await app.listen(0,'127.0.0.1');base=await app.getUrl();process.env.ADMIN_ORIGIN=base;db=app.get(Db);
 });
 after(async()=>{await app?.close();if(dataDir)await rm(dataDir,{recursive:true,force:true});});
@@ -54,6 +57,7 @@ test('Configured card durations drive opening, renewal and history snapshots',as
   const settings=await call('/admin/settings','PATCH',{name:'悦体健身',phone:'13800138000',monthCardDays:45,yearCardDays:400});assert.equal(settings.status,200,JSON.stringify(settings.data));
   const start=todayShanghai();assert.equal((await call('/admin/members','POST',{name:'缺少备注',phone:phone(),kind:'month',startDate:start,endDate:addDays(start,30),cardRemark:'',note:''})).status,400);
   const member=await create('month',45),detail=(await call(`/admin/members/${member.id}`)).data;
+  assert.match(member.card_number,new RegExp(`^Y${beijingMonth()}\\d{4}$`));
   assert.equal(detail.card.end_date,addDays(start,45));assert.equal(detail.cardHistory[0].duration_days,45);assert.equal(detail.avatar_key,undefined);assert.equal(detail.bound,undefined);
   const renewed=await call(`/admin/members/${member.id}/card/renew`,'POST',{kind:'month',startDate:start,endDate:addDays(detail.card.end_date,45),remark:'',version:detail.card.version});assert.equal(renewed.status,201,JSON.stringify(renewed.data));
   const after=(await call(`/admin/members/${member.id}`)).data;assert.equal(after.cardHistory[0].duration_days,45);
@@ -70,11 +74,36 @@ test('Excel template and validation use the current configured duration',async()
 
 test('Full Excel backup saves locally and restores members atomically',async()=>{
   const before=Number((await db.query('SELECT count(*)::int AS n FROM members')).rows[0].n),created=await call('/admin/backup/run','POST');assert.equal(created.status,201,JSON.stringify(created.data));
-  const bytes=await readFile(created.data.job.filePath);const book=new ExcelJS.Workbook();await book.xlsx.load(bytes);for(const name of ['备份信息','门店设置','会员档案','当前会员卡','会员卡历史','操作记录'])assert.ok(book.getWorksheet(name));
+  const bytes=await readFile(created.data.job.filePath);const book=new ExcelJS.Workbook();await book.xlsx.load(bytes);for(const name of ['备份信息','门店设置','会员档案','当前会员卡','会员卡历史'])assert.ok(book.getWorksheet(name));assert.equal(book.getWorksheet('操作记录'),undefined);assert.equal(book.getWorksheet('备份信息')!.getCell('B2').value,'2');
   await create('year',370);assert.equal(Number((await db.query('SELECT count(*)::int AS n FROM members')).rows[0].n),before+1);
   const form=new FormData();form.append('file',new Blob([new Uint8Array(bytes)]),'backup.xlsx');const restored=await call('/admin/backup/restore','POST',form);assert.equal(restored.status,201,JSON.stringify(restored.data));
   assert.equal(Number((await db.query('SELECT count(*)::int AS n FROM members')).rows[0].n),before);
   const invalid=new FormData();invalid.append('file',new Blob(['broken']),'backup.xlsx');assert.equal((await call('/admin/backup/restore','POST',invalid)).status,400);assert.equal(Number((await db.query('SELECT count(*)::int AS n FROM members')).rows[0].n),before);
+});
+
+test('Automatic backups are unique per Beijing date and reuse the same job',async()=>{
+  const backups=app.get(BackupsService),date=todayShanghai();const first=await backups.createLocal('automatic',date),second=await backups.createLocal('automatic',date);
+  assert.equal(first.skipped,false);assert.equal(second.skipped,true);assert.equal(second.job.id,first.job.id);
+  const count=Number((await db.query("SELECT count(*)::int AS n FROM backup_jobs WHERE trigger_source='automatic' AND scheduled_date=$1",[date])).rows[0].n);assert.equal(count,1);
+});
+
+test('Member numbers use a shared monthly sequence',async()=>{
+  const first=await create('month',35),second=await create('month',35);assert.equal(first.card_number.slice(0,7),`Y${beijingMonth()}`);assert.equal(second.card_number.slice(0,7),first.card_number.slice(0,7));
+  assert.equal(Number(second.card_number.slice(-4)),Number(first.card_number.slice(-4))+1);
+});
+
+test('Legacy v1 backups restore while ignoring their operation sheet',async()=>{
+  const backups=app.get(BackupsService),legacy=await backups.workbook();legacy.getWorksheet('备份信息')!.getCell('B2').value='1';legacy.getWorksheet('会员档案')!.getCell('D1').value='会员卡号';
+  const operations=legacy.addWorksheet('操作记录');operations.addRow(['ID','会员ID','操作','操作者','详情','操作时间']);operations.addRow(['fb3b160b-8591-4824-b558-455a62c77ffc','','legacy_action','owner','{}','2025-01-01T00:00:00.000Z']);
+  const before=Number((await db.query('SELECT count(*)::int AS n FROM audit_logs')).rows[0].n);await backups.restore(Buffer.from(await legacy.xlsx.writeBuffer()));
+  assert.equal(Number((await db.query("SELECT count(*)::int AS n FROM audit_logs WHERE action='legacy_action'")).rows[0].n),0);assert.ok(Number((await db.query('SELECT count(*)::int AS n FROM audit_logs')).rows[0].n)>=before);
+  for(const row of (await db.query('SELECT card_number FROM members')).rows)assert.match(row.card_number,/^Y\d{10}$/);
+});
+
+test('Operation history flushes to monthly UTF-8 logs and is not exported',async()=>{
+  await app.get(OperationLogsService).flush();const file=join(dataDir,'logs',`operations-${todayShanghai().slice(0,7)}.log`),content=await readFile(file,'utf8');
+  assert.match(content,/管理员 \|/);assert.match(content,/新增会员|修改门店设置/);assert.doesNotMatch(content,/Desktop-Test-Password-123/);
+  assert.equal(Number((await db.query('SELECT count(*)::int AS n FROM audit_logs WHERE flushed_at IS NULL')).rows[0].n),0);
 });
 
 test('Statistics expose expired instead of WeChat binding counts',async()=>{const stats=(await call('/admin/stats')).data;assert.equal(typeof stats.expired,'number');assert.equal(stats.unbound,undefined);});

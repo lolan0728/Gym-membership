@@ -16,18 +16,19 @@ import { ImportsService } from './imports.js';
 import { StorageService } from './storage.js';
 import { PublicController, AdminController, DesktopController } from './controllers.js';
 import { BackupsService } from './backups.js';
+import { OperationLogsService } from './operation-logs.js';
 import { checkConfig, production } from './config.js';
 @Catch()
 export class ErrorFilter implements ExceptionFilter {
   catch(exception:any,host:ArgumentsHost){
     const id=randomUUID(),response=host.switchToHttp().getResponse();let status=500,message='服务暂时不可用，请稍后重试';
     if(exception instanceof HttpException){status=exception.getStatus();const body=exception.getResponse();message=typeof body==='string'?body:(body as any).message;}
-    else if(['23505','23P01','23514','40001','40P01'].includes(exception?.code)) {status=409;message=exception.code==='23P01'?'有效期与已有会员卡重叠，请调整日期':exception.code==='23505'?'手机号、卡号或绑定信息已存在，请刷新并检查数据':'数据发生冲突，请刷新后重试';}
+    else if(['23505','23P01','23514','40001','40P01'].includes(exception?.code)) {status=409;message=exception.code==='23P01'?'有效期与已有会员卡重叠，请调整日期':exception.code==='23505'?'手机号、会员号码或绑定信息已存在，请刷新并检查数据':'数据发生冲突，请刷新后重试';}
     if(status>=500)Logger.error(`Request ${id} failed (${exception?.constructor?.name||'Error'})`,'API');
     response.status(status).json({statusCode:status,message,requestId:id});
   }
 }
-@Module({controllers:[PublicController,AdminController,DesktopController],providers:[Db,AuthService,MembersService,ImportsService,StorageService,BackupsService,{provide:APP_GUARD,useClass:AuthGuard}]})
+@Module({controllers:[PublicController,AdminController,DesktopController],providers:[Db,AuthService,MembersService,ImportsService,StorageService,OperationLogsService,BackupsService,{provide:APP_GUARD,useClass:AuthGuard}]})
 export class AppModule {}
 export async function createApp(){
   checkConfig();const app=await NestFactory.create(AppModule,{logger:process.env.NODE_ENV==='test'?false:['error','warn','log']});
@@ -43,4 +44,5 @@ export async function createApp(){
 if(process.argv[1] && fileURLToPath(import.meta.url)===resolve(process.argv[1]))createApp().then(async app=>{
   await app.listen(Number(process.env.PORT||3000),process.env.HOST||'127.0.0.1');
   const cleanup=setInterval(()=>app.get(Db).tx(async q=>{await q.query('DELETE FROM sessions WHERE expires_at<now()');await q.query("DELETE FROM rate_limits WHERE reset_at<now()-interval '1 day'");}).catch(()=>Logger.warn('Session cleanup failed')),3600000);cleanup.unref();
+  if(process.env.DESKTOP_MODE==='true'){const logs=setInterval(()=>app.get(OperationLogsService).flush().catch(()=>Logger.warn('Operation log flush failed')),2000);logs.unref();}
 }).catch(e=>{Logger.error(e.message);process.exit(1);});

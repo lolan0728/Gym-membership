@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {addDays,dateSchema,statusOf,todayShanghai,createMemberSchema,cardRemarkRequired,defaultEndDate} from '../src/domain.js';
+import {formatBeijingDateTime,normalizeExcelDateTime} from '../src/time.js';
 test('Beijing dates: end date inclusive and changes exactly at local midnight',()=>{
   const card={start_date:'2026-01-01',end_date:'2026-09-18',voided_at:null};
   assert.equal(statusOf(card,todayShanghai(new Date('2026-09-18T15:59:59Z'))),'active');
@@ -28,4 +29,9 @@ test('Membership duration uses exact calendar-day addition',()=>{
   assert.equal(createMemberSchema.safeParse({name:'测试',phone:'13900000001',kind:'month',startDate:'2026-03-01',endDate:'2026-04-01'}).success,true);
   const parsed=createMemberSchema.parse({name:'测试',phone:'13900000001',kind:'month',startDate:'2026-03-01',endDate:'2026-04-01',cardRemark:'  赠送一天  '});
   assert.equal(parsed.cardRemark,'赠送一天');
+});
+test('Date-time output is fixed to Beijing 24-hour format',()=>{
+  assert.equal(formatBeijingDateTime('2026-09-20T13:35:08Z'),'2026/09/20 21:35:08');
+  assert.equal(normalizeExcelDateTime('2026/09/20 21:35:08'),'2026-09-20T21:35:08+08:00');
+  assert.equal(normalizeExcelDateTime('2026-09-20T13:35:08.000Z'),'2026-09-20T13:35:08.000Z');
 });

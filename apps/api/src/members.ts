@@ -1,8 +1,9 @@
 import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { AuthRequest } from './auth.js';
 import { Db, Queryable } from './db.js';
 import { cardRemarkRequired, membershipDays, MembershipDurations, statusOf, todayShanghai } from './domain.js';
+import { beijingMonth } from './time.js';
 
 export async function audit(q:Queryable,action:string,memberId:string|null,detail:unknown,actor='owner') {
   await q.query('INSERT INTO audit_logs(id,member_id,action,actor,detail) VALUES($1,$2,$3,$4,$5)',[randomUUID(),memberId,action,actor,JSON.stringify(detail)]);
@@ -12,6 +13,14 @@ export async function audit(q:Queryable,action:string,memberId:string|null,detai
 export async function membershipDurations(q:Queryable):Promise<MembershipDurations>{
   const row=(await q.query('SELECT month_card_days,year_card_days FROM settings WHERE id=1')).rows[0];
   return {monthCardDays:Number(row.month_card_days),yearCardDays:Number(row.year_card_days)};
+}
+
+export async function nextMemberNumber(q:Queryable,monthKey=beijingMonth()){
+  const {rows}=await q.query(`INSERT INTO member_number_sequences(month_key,last_value) VALUES($1,1)
+    ON CONFLICT(month_key) DO UPDATE SET last_value=member_number_sequences.last_value+1
+    WHERE member_number_sequences.last_value<9999 RETURNING last_value`,[monthKey]);
+  if(!rows[0])throw new ConflictException(`${monthKey.slice(0,4)}年${monthKey.slice(4)}月会员数量已达到 9999 人，无法继续生成会员号码`);
+  return `Y${monthKey}${String(rows[0].last_value).padStart(4,'0')}`;
 }
 
 const date=(value:string|Date)=>value instanceof Date?value.toISOString().slice(0,10):value.slice(0,10);
@@ -35,7 +44,7 @@ const displayHistory=(rows:any[])=>rows.map(row=>displayCard(row));
 export async function insertMember(q:Queryable,input:any) {
   const durations=await membershipDurations(q),durationDays=membershipDays(input.kind,durations);
   if(cardRemarkRequired(input.startDate,input.endDate,input.kind,durations)&&!input.cardRemark)throw new BadRequestException(`期限不是月卡 ${durations.monthCardDays} 天或年卡 ${durations.yearCardDays} 天时，请填写备注`);
-  const id=randomUUID(),cardNumber=`GYM${randomBytes(8).toString('hex').toUpperCase()}`,cardId=randomUUID();
+  const id=randomUUID(),cardNumber=await nextMemberNumber(q),cardId=randomUUID();
   const {rows}=await q.query('INSERT INTO members(id,name,phone,card_number,note) VALUES($1,$2,$3,$4,$5) RETURNING *',[id,input.name,input.phone,cardNumber,input.note||'']);
   const card=(await q.query('INSERT INTO memberships(id,member_id,kind,start_date,end_date) VALUES($1,$2,$3,$4,$5) RETURNING *',[cardId,id,input.kind,input.startDate,input.endDate])).rows[0];
   await cardEvent(q,id,'opened',card,input.kind,input.cardRemark,{},durationDays);

@@ -66,7 +66,7 @@ export class AdminController {
   @Post('settings/logo') @UseInterceptors(upload()) async logo(@UploadedFile()file:Express.Multer.File){const key=await this.storage.putLogo(fileBuffer(file));let old:string|null=null;try{await this.db.tx(async q=>{old=(await q.query('SELECT logo_key FROM settings WHERE id=1 FOR UPDATE')).rows[0].logo_key;await q.query('UPDATE settings SET logo_key=$1,updated_at=now() WHERE id=1',[key]);await audit(q,'logo_updated',null,{});});}catch(e){await this.storage.remove(key).catch(()=>{});throw e;}if(old)await this.storage.remove(old).catch(()=>Logger.warn('Old logo cleanup failed','Storage'));return {ok:true};}
   @Get('backup/settings') backupSettings(){return this.backups.settings();}
   @Patch('backup/settings') updateBackupSettings(@Body()body:unknown){return this.backups.updateSettings(parse(backupSettingsSchema,body));}
-  @Post('backup/run') runBackup(){return this.backups.createLocal(true);}
+  @Post('backup/run') runBackup(){return this.backups.createLocal('manual');}
   @Get('backup/jobs') backupJobs(){return this.backups.jobs();}
   @Get('backup/export') async exportBackup(@Res()res:Response){res.type(BACKUP_MIME).attachment(`joyfit-full-backup-${Date.now()}.xlsx`).send(await this.backups.exportBuffer());}
   @Post('backup/restore') @UseInterceptors(upload(25*1024*1024)) async restoreBackup(@UploadedFile()file:Express.Multer.File){if(!file?.originalname.toLowerCase().endsWith('.xlsx'))throw new BadRequestException('请选择完整备份 .xlsx 文件');return this.backups.restore(fileBuffer(file));}
@@ -76,7 +76,7 @@ export class AdminController {
 export class DesktopController {
   constructor(@Inject(BackupsService)private backups:BackupsService){}
   private authorize(token:string|undefined){const expected=process.env.DESKTOP_CONTROL_TOKEN||'';if(!expected||!token)throw new BadRequestException('桌面控制凭证无效');const a=Buffer.from(expected),b=Buffer.from(token);if(a.length!==b.length||!timingSafeEqual(a,b))throw new BadRequestException('桌面控制凭证无效');}
-  @Post('backup/run') @Public() run(@Headers('x-desktop-token')token:string|undefined,@Body()body:unknown){this.authorize(token);const {force}=parse(z.object({force:z.boolean().default(false)}).strict(),body||{});return this.backups.createLocal(force);}
-  @Get('backup/pending') @Public() async pending(@Headers('x-desktop-token')token:string|undefined){this.authorize(token);return {job:await this.backups.pending(),settings:await this.backups.settings()};}
+  @Post('backup/run') @Public() run(@Headers('x-desktop-token')token:string|undefined,@Body()body:unknown){this.authorize(token);const input=parse(z.object({trigger:z.enum(['manual','automatic']).default('manual'),scheduledDate:dateSchema.optional()}).strict(),body||{});return this.backups.createLocal(input.trigger,input.scheduledDate);}
+  @Get('backup/pending') @Public() async pending(@Headers('x-desktop-token')token:string|undefined){this.authorize(token);return {job:await this.backups.automaticPending(),settings:await this.backups.settings()};}
   @Post('backup/:id/email') @Public() mark(@Headers('x-desktop-token')token:string|undefined,@Param('id')id:string,@Body()body:unknown){this.authorize(token);const input=parse(z.object({ok:z.boolean(),error:z.string().max(1000).default('')}).strict(),body);return this.backups.markEmail(parse(uuidSchema,id),input.ok,input.error);}
 }

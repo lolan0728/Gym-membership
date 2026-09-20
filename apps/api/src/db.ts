@@ -18,6 +18,10 @@ export class Db implements Queryable, OnModuleInit, OnModuleDestroy {
     if (process.env.DB_DRIVER === 'postgres') this.pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 10 });
     else { const { btree_gist } = await import('@electric-sql/pglite/contrib/btree_gist'); const path=process.env.PGLITE_PATH || 'memory://'; if(path!=='memory://')await mkdir(resolve(path),{recursive:true});this.local = new PGlite(path, { extensions: { btree_gist } }); }
     await this.migrate();
+    // The desktop process owns the only local API instance. Clearing sessions
+    // here makes every real application restart require the administrator
+    // password while a second launch is still handled by Tauri's single-instance lock.
+    if(desktopMode())await this.query("DELETE FROM sessions WHERE role='admin'");
     const existing = await this.query('SELECT id FROM administrators WHERE id=1');
     if (!existing.rows.length) {
       if (desktopMode()) return;
