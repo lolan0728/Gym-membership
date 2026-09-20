@@ -6,5 +6,7 @@ commands.allow = [
   "test_backup_email",
   "run_backup",
   "choose_backup_directory",
-  "open_backup_directory"
+  "open_backup_directory",
+  "open_operation_log_directory",
+  "save_report_pdf"
 ]

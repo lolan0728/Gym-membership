@@ -107,3 +107,9 @@ test('Operation history flushes to monthly UTF-8 logs and is not exported',async
 });
 
 test('Statistics expose expired instead of WeChat binding counts',async()=>{const stats=(await call('/admin/stats')).data;assert.equal(typeof stats.expired,'number');assert.equal(stats.unbound,undefined);});
+
+test('Report endpoints return consistent monthly data and valid PDF documents',async()=>{
+  const month=todayShanghai().slice(0,7),json=await call(`/admin/reports/monthly?month=${month}`);assert.equal(json.status,200,JSON.stringify(json.data));assert.equal(json.data.month,month);assert.equal(typeof json.data.current.total,'number');assert.ok(Array.isArray(json.data.trend));assert.equal(json.data.trend.length,12);
+  for(const path of ['/admin/reports/members.pdf',`/admin/reports/monthly.pdf?month=${month}`]){const pdf=await call(path);assert.equal(pdf.status,200);assert.equal(pdf.res.headers.get('content-type'),'application/pdf');assert.equal(pdf.data.subarray(0,5).toString(),'%PDF-');}
+  assert.equal((await call('/admin/reports/monthly?month=invalid')).status,400);
+});

@@ -15,6 +15,7 @@ import { MembersService } from './members.js';
 import { ImportsService } from './imports.js';
 import { StorageService } from './storage.js';
 import { PublicController, AdminController, DesktopController } from './controllers.js';
+import { ReportsService, ReportsController } from './reports.js';
 import { BackupsService } from './backups.js';
 import { OperationLogsService } from './operation-logs.js';
 import { checkConfig, production } from './config.js';
@@ -28,7 +29,7 @@ export class ErrorFilter implements ExceptionFilter {
     response.status(status).json({statusCode:status,message,requestId:id});
   }
 }
-@Module({controllers:[PublicController,AdminController,DesktopController],providers:[Db,AuthService,MembersService,ImportsService,StorageService,OperationLogsService,BackupsService,{provide:APP_GUARD,useClass:AuthGuard}]})
+@Module({controllers:[PublicController,AdminController,DesktopController,ReportsController],providers:[Db,AuthService,MembersService,ImportsService,StorageService,ReportsService,OperationLogsService,BackupsService,{provide:APP_GUARD,useClass:AuthGuard}]})
 export class AppModule {}
 export async function createApp(){
   checkConfig();const app=await NestFactory.create(AppModule,{logger:process.env.NODE_ENV==='test'?false:['error','warn','log']});

@@ -285,6 +285,27 @@ fn open_operation_log_directory(state: tauri::State<'_, Arc<DesktopState>>) -> R
     Ok(())
 }
 
+#[tauri::command]
+fn save_report_pdf(file_name: String, bytes: Vec<u8>) -> Result<Option<String>, String> {
+    if bytes.is_empty() || bytes.len() > 30 * 1024 * 1024 {
+        return Err("PDF报表内容无效或文件过大".into());
+    }
+    let safe_name = if file_name.to_lowercase().ends_with(".pdf") {
+        file_name
+    } else {
+        format!("{file_name}.pdf")
+    };
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("PDF 报表", &["pdf"])
+        .set_file_name(&safe_name)
+        .save_file()
+    else {
+        return Ok(None);
+    };
+    fs::write(&path, bytes).map_err(|e| format!("保存PDF报表失败：{e}"))?;
+    Ok(Some(path.to_string_lossy().to_string()))
+}
+
 fn start_server(app: &tauri::AppHandle) -> Result<Arc<DesktopState>, String> {
     let resource = windows_path(app.path().resource_dir().map_err(|e| e.to_string())?);
     let data = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
@@ -430,7 +451,8 @@ pub fn run() {
             run_backup,
             choose_backup_directory,
             open_backup_directory,
-            open_operation_log_directory
+            open_operation_log_directory,
+            save_report_pdf
         ])
         .setup(|app| {
             let state = start_server(app.handle()).map_err(std::io::Error::other)?;

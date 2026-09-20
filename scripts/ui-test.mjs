@@ -33,6 +33,7 @@ try{
   await page.getByPlaceholder('输入你的管理员密码').fill(password);await page.getByRole('button',{name:'进入工作台'}).click();
   await page.getByRole('heading',{name:'会员管理',exact:true}).waitFor();
   await page.getByText('杭宁府店',{exact:true}).waitFor();
+  assert.equal(await page.locator('.sidebar .nav-count').count(),0,'Sidebar must not show a member-count badge');
   assert.equal(await page.getByPlaceholder('全部卡种').count(),0,'Member search must not include a card-kind filter');
   await page.locator('.members-table .member-identity').first().waitFor();
   const allMembersText=await page.locator('.table-footer>span').innerText();
@@ -51,9 +52,10 @@ try{
   for(const [kind,color] of [['month','rgb(1, 85, 86)'],['year','rgb(27, 33, 31)']]){
     const row=page.locator('.members-table tbody tr').filter({has:page.locator(`.kind-badge.${kind}`)}).first();await row.click();const card=page.locator(`.member-card.kind-${kind}`);await card.waitFor();const cardBackground=await card.evaluate(element=>getComputedStyle(element).backgroundImage);assert.ok(cardBackground.includes(color));assert.notEqual(await card.locator('.card-status').evaluate(element=>getComputedStyle(element).backgroundColor),'rgba(0, 0, 0, 0)');if(kind==='year'){assert.ok(cardBackground.includes('radial-gradient'));assert.equal(await card.evaluate(element=>getComputedStyle(element).borderColor),'rgb(168, 141, 78)');}await page.locator('.el-drawer__close-btn').click();
   }
-  if(historyFixture){await page.getByPlaceholder('搜索姓名、手机号或卡号').fill(historyFixture.card_number);const fixtureRow=page.locator('.members-table tbody tr').filter({hasText:historyFixture.card_number});await fixtureRow.waitFor();await fixtureRow.click();await page.getByText('续月卡',{exact:true}).waitFor();assert.equal(await page.locator('.history-record .kind-badge').count(),0);const remark=page.locator('.history-record .event-remark').first(),remarkText=remark.locator('span');await remarkText.waitFor();assert.ok((await remarkText.innerText()).startsWith('备注：'));assert.equal(await remark.evaluate(element=>getComputedStyle(element).fontSize),'11px');assert.ok(await remarkText.evaluate(element=>element.classList.contains('collapsed')));await remark.getByRole('button',{name:'展开全部'}).click();assert.equal(await remarkText.evaluate(element=>element.classList.contains('collapsed')),false);await remark.getByRole('button',{name:'收起'}).click();assert.ok(await remarkText.evaluate(element=>element.classList.contains('collapsed')));await page.screenshot({path:resolve(root,'test-results/member-history.png'),fullPage:true});await page.locator('.el-drawer__close-btn').click();await page.getByPlaceholder('搜索姓名、手机号或卡号').fill('');await page.locator('.members-table .member-identity').first().waitFor();}
+  if(historyFixture){await page.getByPlaceholder('搜索姓名、手机号或会员号码').fill(historyFixture.card_number);const fixtureRow=page.locator('.members-table tbody tr').filter({hasText:historyFixture.card_number});await fixtureRow.waitFor();await fixtureRow.click();await page.getByText('续月卡',{exact:true}).waitFor();assert.equal(await page.locator('.history-record .kind-badge').count(),0);const remark=page.locator('.history-record .event-remark').first(),remarkText=remark.locator('span');await remarkText.waitFor();assert.ok((await remarkText.innerText()).startsWith('备注：'));assert.equal(await remark.evaluate(element=>getComputedStyle(element).fontSize),'11px');assert.ok(await remarkText.evaluate(element=>element.classList.contains('collapsed')));await remark.getByRole('button',{name:'展开全部'}).click();assert.equal(await remarkText.evaluate(element=>element.classList.contains('collapsed')),false);await remark.getByRole('button',{name:'收起'}).click();assert.ok(await remarkText.evaluate(element=>element.classList.contains('collapsed')));await page.screenshot({path:resolve(root,'test-results/member-history.png'),fullPage:true});await page.locator('.el-drawer__close-btn').click();await page.getByPlaceholder('搜索姓名、手机号或会员号码').fill('');await page.locator('.members-table .member-identity').first().waitFor();}
   const activeRow=page.locator('.members-table tbody tr').filter({has:page.locator('.member-status.active')}).first();await activeRow.click();
   assert.equal(await page.getByRole('tab',{name:'操作记录'}).count(),0,'Audit logs must remain hidden from the member detail drawer');
+  const actions=page.locator('.record-actions .el-button');assert.equal(await actions.first().innerText(),'作废会员卡');assert.match(await actions.first().evaluate(element=>getComputedStyle(element).backgroundColor),/rgb\(199, 53, 61\)/);assert.equal(await actions.nth(1).innerText(),'修改卡片');
   await page.getByRole('button',{name:'办理续卡',exact:true}).click();
   await page.getByText('原到期日期',{exact:true}).waitFor();await page.getByText('新到期日期',{exact:true}).waitFor();await page.locator('.el-dialog:visible').getByText('备注（选填）',{exact:true}).waitFor();
   assert.ok(await page.getByText('原到期日期',{exact:true}).locator('..').locator('input').isDisabled());
@@ -67,23 +69,24 @@ try{
   await page.getByText('会员资料已更新',{exact:true}).waitFor();
   await page.getByRole('button',{name:'编辑会员资料'}).click();await note.fill(old);await page.getByRole('button',{name:'保存修改',exact:true}).click();
   await page.getByRole('tab',{name:'会员卡记录'}).click();
-  await page.locator('.record-card').first().waitFor();assert.match(await page.locator('.record-card>p').first().innerText(),/\d{4}-\d{2}-\d{2}/);
+  await page.locator('.record-card').first().waitFor();assert.match(await page.locator('.record-card>p').first().innerText(),/\d{4}\/\d{2}\/\d{2}/);
   await page.locator('.el-message').last().waitFor({state:'hidden'}).catch(()=>{});
   await page.screenshot({path:resolve(root,'test-results/member-detail.png'),fullPage:true});
   await page.locator('.el-drawer__close-btn').click();
+  await page.locator('.sidebar nav button').filter({hasText:'统计报表'}).click();await page.getByRole('heading',{name:'统计报表',exact:true}).waitFor();await page.getByRole('heading',{name:'最近 12 个月趋势'}).waitFor();assert.equal(await page.locator('.trend-item').count(),12);await page.getByText(/即将到期 \d+/).first().waitFor();await page.screenshot({path:resolve(root,'test-results/reports.png'),fullPage:true});
   await page.locator('.sidebar nav button').filter({hasText:'批量导入'}).click();await page.getByRole('heading',{name:'导入会员档案'}).waitFor();
   const download=page.waitForEvent('download');await page.getByRole('button',{name:'下载模板',exact:true}).click();const file=await download;await file.saveAs(resolve(root,'test-results/会员导入模板.xlsx'));
   await page.screenshot({path:resolve(root,'test-results/import.png'),fullPage:true});
-  await page.locator('.sidebar nav button').filter({hasText:'门店设置'}).click();await page.getByRole('heading',{name:'门店信息',exact:true}).waitFor();
+  await page.locator('.sidebar nav button').filter({hasText:'系统设置'}).click();await page.getByRole('heading',{name:'门店与会员卡设置',exact:true}).waitFor();
   await page.screenshot({path:resolve(root,'test-results/settings.png'),fullPage:true});
   await page.locator('.sidebar nav button').filter({hasText:'会员管理'}).click();await page.getByRole('button',{name:'新增会员',exact:true}).first().click();
-  await page.getByRole('dialog').waitFor();assert.equal(await page.getByText('原有卡号（选填）').count(),0);await page.locator('.el-dialog:visible').getByText('备注（选填）',{exact:true}).waitFor();await page.getByText('会员档案备注（会员不可见）',{exact:true}).waitFor();
+  await page.getByRole('dialog').waitFor();assert.equal(await page.getByText('原有卡号（选填）').count(),0);await page.locator('.el-dialog:visible').getByText('备注（选填）',{exact:true}).waitFor();await page.getByText('会员档案备注',{exact:true}).waitFor();
   const newMemberEnd=page.getByPlaceholder('选择到期日期');const originalEnd=await newMemberEnd.inputValue();const customEnd=new Date(`${originalEnd}T00:00:00Z`);customEnd.setUTCDate(customEnd.getUTCDate()+1);await newMemberEnd.fill(customEnd.toISOString().slice(0,10));await newMemberEnd.press('Enter');await page.locator('.el-dialog:visible').getByText('备注 *',{exact:true}).waitFor();
   await page.screenshot({path:resolve(root,'test-results/new-member.png'),fullPage:true});await page.getByRole('button',{name:'取消',exact:true}).click();
-  await page.getByPlaceholder('搜索姓名、手机号或卡号').fill('不存在的会员-UI');await page.getByText('没有找到匹配的会员',{exact:true}).waitFor();
-  await page.getByPlaceholder('搜索姓名、手机号或卡号').fill('');await page.locator('.members-table .member-identity').first().waitFor();
+  await page.getByPlaceholder('搜索姓名、手机号或会员号码').fill('不存在的会员-UI');await page.getByText('没有找到匹配的会员',{exact:true}).waitFor();
+  await page.getByPlaceholder('搜索姓名、手机号或会员号码').fill('');await page.locator('.members-table .member-identity').first().waitFor();
   await page.setViewportSize({width:1024,height:900});await page.screenshot({path:resolve(root,'test-results/tablet.png'),fullPage:true});
   const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth);assert.equal(overflow,false,'Page must fit the viewport');
   await page.getByRole('button',{name:'退出登录',exact:true}).click();await page.getByRole('heading',{name:'欢迎回到悦体健身'}).waitFor();
-  assert.deepEqual(errors,[]);console.log('Browser checks passed: gray expired status, premium annual card, renewal history labels, collapsible remarks, renewal dates, hidden audit UI, responsive layout, logout.');
+  assert.deepEqual(errors,[]);console.log('Browser checks passed: sidebar count removed, PDF report dashboard, void action styling, card status, renewal history, responsive layout, logout.');
 }finally{await browser.close();if(historyFixture&&fixtureDb)await fixtureDb.query('UPDATE membership_events SET remark=$2,event_type=$3,selected_kind=$4 WHERE id=$1',[historyFixture.id,historyFixture.remark,historyFixture.event_type,historyFixture.selected_kind]);await vite?.close();await apiApp?.close();}

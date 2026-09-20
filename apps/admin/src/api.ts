@@ -5,6 +5,9 @@ export interface Store {name:string;phone:string;monthCardDays:number;yearCardDa
 export interface ImportBatch {id:string;status:string;count:number;rows:any[];errors:{row:number;message:string}[];created_at?:string;committedAt?:string;}
 export interface BackupJob {id:string;filePath:string;fileName:string;dataRevision:number;status:'local_saved'|'sent'|'email_failed';error:string;triggerSource:'manual'|'automatic'|'pre_restore';scheduledDate?:string;createdAt:string;sentAt?:string;}
 export interface BackupSettings {directory:string;senderEmail:string;recipientEmail:string;scheduleTime:string;retentionCount:number;latest:BackupJob|null;automaticStatus:'waiting'|'completed'|'failed';automaticStatusText:string;today:string;latestAutomaticDate:string|null;initializedDate:string|null;}
+export interface ReportMetrics {newMembers:number;newYear:number;newMonth:number;renewMembers:number;renewCount:number;renewYear:number;renewMonth:number;early:number;late:number;reopened:number;unclassified:number;voidCount:number;}
+export interface ReportMember {id:string;name:string;phone:string;card_number:string;status:'active'|'expired'|'upcoming'|'voided'|'none';card:(Card&{kind:'year'|'month'})|null;expiredDays?:number;}
+export interface MonthlyReport {month:string;generatedAt:string;today:string;storeName:string;metrics:ReportMetrics;unknownFirst:number;current:{total:number;active:number;upcoming:number;expired:number;voided:number;none:number;activeYear:number;activeMonth:number};trend:{month:string;newMembers:number;renewMembers:number}[];expiring:ReportMember[];expired:ReportMember[];}
 export async function api<T=any>(path:string,options:RequestInit={}):Promise<T>{
   const headers=new Headers(options.headers);headers.set('x-gym-request','1');
   if(options.body&&!(options.body instanceof FormData))headers.set('content-type','application/json');
@@ -26,6 +29,13 @@ export async function download(path:string,name:string){
   const response=await fetch(`/api${path}`,{credentials:'same-origin'});
   if(!response.ok){const e=await response.json().catch(()=>({message:'下载失败'}));throw new Error(e.message);}
   const url=URL.createObjectURL(await response.blob()),link=document.createElement('a');link.href=url;link.download=name;link.click();setTimeout(()=>URL.revokeObjectURL(url),10000);
+}
+export async function savePdf(path:string,name:string){
+  const response=await fetch(`/api${path}`,{credentials:'same-origin'});
+  if(!response.ok){const e=await response.json().catch(()=>({message:'PDF报表生成失败'}));throw new Error(e.message);}
+  const bytes=Array.from(new Uint8Array(await response.arrayBuffer()));
+  if((window as any).__TAURI_INTERNALS__)return desktopInvoke<string|null>('save_report_pdf',{fileName:name,bytes});
+  const url=URL.createObjectURL(new Blob([new Uint8Array(bytes)],{type:'application/pdf'})),link=document.createElement('a');link.href=url;link.download=name;link.click();setTimeout(()=>URL.revokeObjectURL(url),10000);return name;
 }
 export const statusLabels:Record<string,string>={active:'有效',expired:'已到期',upcoming:'未生效',voided:'已作废'};
 export const kindLabel=(kind:string)=>kind==='year'?'年卡':'月卡';
