@@ -463,7 +463,7 @@ pub fn run() {
                 .map_err(|e| std::io::Error::other(format!("{e}")))?;
             let _window = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
                 .title("悦体健身 · JOYFIT 会员管理")
-                .inner_size(1280.0, 820.0)
+                .inner_size(1400.0, 900.0)
                 .min_inner_size(1024.0, 680.0)
                 .center()
                 .build()?;
