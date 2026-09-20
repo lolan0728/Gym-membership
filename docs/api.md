@@ -20,7 +20,7 @@
 | PUT /me/theme | `{theme:gold/blue/orange/white}`；微信网络接口使用 PUT |
 | POST /me/avatar、GET /me/avatar | 上传/读取本人头像；私有头像需会话，不能指定其他会员 |
 | GET /admin/session、POST /admin/logout | 当前管理员/注销 |
-| POST /admin/password | `{current,next}`；新密码至少 12 位，撤销全部管理员会话 |
+| POST /admin/password | `{current,next}`；新密码至少 8 位、可使用纯数字，撤销全部管理员会话 |
 | GET /admin/stats | 总会员、当前有效、即将到期、未绑定数；年卡提前 30 天、月卡提前 7 天 |
 | GET /admin/members | search/status/endFrom/endTo/expiring/page/pageSize，默认 10 条，最大 100 条；不支持卡种筛选 |
 | POST /admin/members | `{name,phone,note?,kind,startDate,endDate,cardRemark?}`；系统生成卡号，新增档案与初始卡片同一事务 |

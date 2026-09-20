@@ -34,10 +34,21 @@ after(async()=>{await app?.close();if(dataDir)await rm(dataDir,{recursive:true,f
 
 test('First run requires setup and creates the local administrator',async()=>{
   assert.deepEqual((await call('/setup/status','GET',undefined,true)).data,{required:true});
+  assert.equal((await call('/setup','POST',{name:'悦体健身',phone:'13800138000',monthCardDays:30,yearCardDays:365,password:'1234567',backupDirectory:backupDir,senderEmail:'',recipientEmail:''},true)).status,400);
+  assert.deepEqual((await call('/setup/status','GET',undefined,true)).data,{required:true});
   const setup=await call('/setup','POST',{name:'悦体健身',phone:'13800138000',monthCardDays:30,yearCardDays:365,password,backupDirectory:backupDir,senderEmail:'',recipientEmail:''},true);assert.equal(setup.status,201,JSON.stringify(setup.data));
   assert.deepEqual((await call('/setup/status','GET',undefined,true)).data,{required:false});
   assert.equal((await call('/setup','POST',{name:'重复',phone:'',monthCardDays:30,yearCardDays:365,password,backupDirectory:'',senderEmail:'',recipientEmail:''},true)).status,400);
   const login=await call('/admin/login','POST',{password},true);assert.equal(login.status,201);cookie=login.res.headers.get('set-cookie')!.split(';')[0];
+});
+
+test('Eight-digit numeric administrator passwords are accepted',async()=>{
+  assert.equal((await call('/admin/password','POST',{current:password,next:'1234567'})).status,400);
+  assert.equal((await call('/admin/password','POST',{current:password,next:'12345678'})).status,201);
+  assert.equal((await call('/admin/login','POST',{password},true)).status,401);
+  const numeric=await call('/admin/login','POST',{password:'12345678'},true);assert.equal(numeric.status,201);cookie=numeric.res.headers.get('set-cookie')!.split(';')[0];
+  assert.equal((await call('/admin/password','POST',{current:'12345678',next:password})).status,201);
+  const restored=await call('/admin/login','POST',{password},true);assert.equal(restored.status,201);cookie=restored.res.headers.get('set-cookie')!.split(';')[0];
 });
 
 test('Desktop API has no WeChat member or avatar routes',async()=>{
@@ -48,9 +59,11 @@ test('Desktop API has no WeChat member or avatar routes',async()=>{
 test('Desktop writes accept loopback requests when WebView omits Origin',async()=>{
   const response=await fetch(base+'/api/admin/settings',{method:'PATCH',headers:{cookie,'x-gym-request':'1','content-type':'application/json'},body:JSON.stringify({name:'悦体健身',phone:'',monthCardDays:30,yearCardDays:365})});
   assert.equal(response.status,200,await response.text());
-  const backup=await call('/admin/backup/settings','PATCH',{directory:backupDir,senderEmail:'backup@qq.com',recipientEmail:'',scheduleTime:'20:00',retentionCount:30});
+  const defaults=await call('/admin/backup/settings');assert.equal(defaults.status,200);assert.equal(defaults.data.scheduleTime,'13:00');
+  const backup=await call('/admin/backup/settings','PATCH',{directory:backupDir,senderEmail:'backup@qq.com',recipientEmail:'',scheduleTime:'17:30',retentionCount:30});
   assert.equal(backup.status,200,JSON.stringify(backup.data));assert.equal(backup.data.recipientEmail,'backup@qq.com');
-  await call('/admin/backup/settings','PATCH',{directory:backupDir,senderEmail:'',recipientEmail:'',scheduleTime:'20:00',retentionCount:30});
+  assert.equal(backup.data.scheduleTime,'17:30');
+  await call('/admin/backup/settings','PATCH',{directory:backupDir,senderEmail:'',recipientEmail:'',scheduleTime:'13:00',retentionCount:30});
 });
 
 test('Configured card durations drive opening, renewal and history snapshots',async()=>{

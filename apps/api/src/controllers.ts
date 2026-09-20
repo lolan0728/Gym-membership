@@ -29,7 +29,7 @@ export class PublicController {
   @Get('health') @Public() async health(){await this.db.query('SELECT 1');return {ok:true,desktop:desktopMode()};}
   @Get('setup/status') @Public() async setupStatus(){return {required:!(await this.db.query('SELECT 1 FROM administrators WHERE id=1')).rows.length};}
   @Post('setup') @Public() async setup(@Body()body:unknown){
-    const input=parse(settingsSchema.extend({password:z.string().min(12,'管理员密码至少 12 位').max(128),backupDirectory:z.string().trim().max(500).default(''),senderEmail:email.default(''),recipientEmail:email.default('')}),body);
+    const input=parse(settingsSchema.extend({password:z.string().min(8,'管理员密码至少 8 位').max(128),backupDirectory:z.string().trim().max(500).default(''),senderEmail:email.default(''),recipientEmail:email.default('')}),body);
     await this.db.tx(async q=>{
       if((await q.query('SELECT 1 FROM administrators WHERE id=1 FOR UPDATE')).rows.length)throw new BadRequestException('初始化已经完成');
       await q.query('INSERT INTO administrators(id,password_hash) VALUES(1,$1)',[await hashPassword(input.password)]);
@@ -48,7 +48,7 @@ export class AdminController {
   @Post('login') @Public() async login(@Body()body:unknown,@Req()req:Request,@Res({passthrough:true})res:Response){const {password}=parse(z.object({password:z.string().min(1).max(256)}).strict(),body);const token=await this.auth.login(password,req.ip||'unknown');res.cookie('gym_admin',token,cookieOptions());return {ok:true};}
   @Get('session') session(){return {name:'管理员',role:'owner'};}
   @Post('logout') async logout(@Req()req:AuthRequest,@Res({passthrough:true})res:Response){await this.db.query('DELETE FROM sessions WHERE token_hash=$1',[req.auth.tokenHash]);res.clearCookie('gym_admin',cookieOptions());return {ok:true};}
-  @Post('password') async password(@Body()body:unknown,@Req()req:AuthRequest,@Res({passthrough:true})res:Response){await this.auth.limit(`password:${req.auth.tokenHash}`,5,900);const input=parse(z.object({current:z.string().max(256),next:z.string().min(12,'新密码至少 12 位').max(128)}).strict(),body);await this.auth.password(input.current,input.next);res.clearCookie('gym_admin',cookieOptions());return {ok:true};}
+  @Post('password') async password(@Body()body:unknown,@Req()req:AuthRequest,@Res({passthrough:true})res:Response){await this.auth.limit(`password:${req.auth.tokenHash}`,5,900);const input=parse(z.object({current:z.string().max(256),next:z.string().min(8,'新密码至少 8 位').max(128)}).strict(),body);await this.auth.password(input.current,input.next);res.clearCookie('gym_admin',cookieOptions());return {ok:true};}
   @Get('stats') stats(){return this.members.stats();}
   @Get('members') list(@Query()query:unknown){return this.members.list(parse(z.object({search:z.string().max(80).optional(),status:z.enum(['active','upcoming','expired','voided']).optional(),endFrom:dateSchema.optional(),endTo:dateSchema.optional(),expiring:z.literal('true').transform(()=>true).optional(),page:z.coerce.number().int().min(1).default(1),pageSize:z.coerce.number().int().min(1).max(100).default(10)}).strict(),query));}
   @Post('members') create(@Body()body:unknown){return this.members.create(parse(createMemberSchema,body));}

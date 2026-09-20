@@ -1,8 +1,20 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import {resolve} from 'node:path';
+import {PGlite} from '@electric-sql/pglite';
 import {addDays,dateSchema,statusOf,todayShanghai,createMemberSchema,cardRemarkRequired,defaultEndDate} from '../src/domain.js';
 import {formatBeijingDateTime,normalizeExcelDateTime} from '../src/time.js';
 import {summarize} from '../src/reports.js';
+test('Backup time migration changes only the old default and sets new installs to 13:00',async()=>{
+  const db=new PGlite();
+  await db.exec("CREATE TABLE backup_settings(id integer PRIMARY KEY,schedule_time varchar(5) NOT NULL DEFAULT '20:00',updated_at timestamptz NOT NULL DEFAULT now()); INSERT INTO backup_settings(id,schedule_time) VALUES(1,'20:00'),(2,'17:30');");
+  await db.exec(await readFile(resolve(import.meta.dirname,'../migrations/007_backup_time_1300.sql'),'utf8'));
+  await db.exec('INSERT INTO backup_settings(id) VALUES(3)');
+  const rows=(await db.query<{id:number;schedule_time:string}>('SELECT id,schedule_time FROM backup_settings ORDER BY id')).rows;
+  assert.deepEqual(rows,[{id:1,schedule_time:'13:00'},{id:2,schedule_time:'17:30'},{id:3,schedule_time:'13:00'}]);
+  await db.close();
+});
 test('Beijing dates: end date inclusive and changes exactly at local midnight',()=>{
   const card={start_date:'2026-01-01',end_date:'2026-09-18',voided_at:null};
   assert.equal(statusOf(card,todayShanghai(new Date('2026-09-18T15:59:59Z'))),'active');

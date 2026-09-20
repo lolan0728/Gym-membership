@@ -9,7 +9,7 @@ const root=resolve(desktop,'../..');
 const release=resolve(desktop,'src-tauri/target/release');
 const resources=resolve(desktop,'src-tauri/resources');
 const output=resolve(root,'output/windows');
-const folderName='悦体健身会员管理_1.2.0_便携版';
+const folderName='悦体健身会员管理_1.2.1_便携版';
 const folder=resolve(output,folderName);
 const archive=resolve(output,`${folderName}.zip`);
 
@@ -20,7 +20,7 @@ await mkdir(folder,{recursive:true});
 await cp(resolve(release,'joyfit-desktop.exe'),resolve(folder,'悦体健身会员管理.exe'));
 await cp(resources,resolve(folder,'resources'),{recursive:true});
 await writeFile(resolve(folder,'使用说明.txt'),[
-  '悦体健身会员管理 1.2.0 便携版',
+  '悦体健身会员管理 1.2.1 便携版',
   '',
   '1. 请先完整解压 ZIP 文件。',
   '2. 双击“悦体健身会员管理.exe”启动。',
