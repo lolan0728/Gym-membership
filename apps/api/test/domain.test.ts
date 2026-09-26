@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {resolve} from 'node:path';
 import {PGlite} from '@electric-sql/pglite';
-import {addDays,dateSchema,statusOf,todayShanghai,createMemberSchema,cardRemarkRequired,defaultEndDate} from '../src/domain.js';
+import {addDays,dateSchema,statusOf,todayShanghai,createMemberSchema,cardRemarkRequired,defaultEndDate,daysBetween,returnEstimate} from '../src/domain.js';
 import {formatBeijingDateTime,normalizeExcelDateTime} from '../src/time.js';
 import {summarize} from '../src/reports.js';
 test('Backup time migration changes only the old default and sets new installs to 13:00',async()=>{
@@ -22,6 +22,17 @@ test('Beijing dates: end date inclusive and changes exactly at local midnight',(
   assert.equal(statusOf(card,'2025-12-31'),'upcoming');
   assert.equal(statusOf({...card,voided_at:new Date()},'2025-12-31'),'voided');
   assert.equal(statusOf({...card,start_date:'2026-09-18'},'2026-09-18'),'active');
+});
+test('Pause duration uses natural days and refund uses the unrounded remaining proportion',()=>{
+  assert.equal(daysBetween('2026-09-01','2026-10-01'),30);assert.equal(daysBetween('2026-09-01','2026-09-01'),0);
+  assert.equal(daysBetween('2024-02-28','2024-03-01'),2);assert.equal(daysBetween('2026-12-31','2027-01-01'),1);
+  const month=returnEstimate({kind:'month',start_date:'2026-09-01'},'2026-09-14');
+  assert.equal(month.usedDays,13);assert.equal(month.estimatedRefund,57); // 56.1 rounds up to 57.
+  assert.equal(returnEstimate({kind:'year',start_date:'2026-01-01'},'2026-01-02').estimatedRefund,498);
+  assert.equal(returnEstimate({kind:'month',start_date:'2026-09-01'},'2026-10-01').estimatedRefund,0);
+  assert.equal(returnEstimate({kind:'month',start_date:'2026-09-01'},'2026-11-01').estimatedRefund,0);
+  assert.equal(returnEstimate({kind:'month',start_date:'2026-10-01'},'2026-09-01').estimatedRefund,99);
+  assert.equal(statusOf({start_date:'2026-01-01',end_date:'2026-02-01',voided_at:null,paused_on:'2026-01-15'},'2026-12-01'),'paused');
 });
 test('Calendar validation rejects non-dates, rollover dates, invalid phone and reversed periods',()=>{
   assert.equal(dateSchema.safeParse('2024-02-29').success,true);

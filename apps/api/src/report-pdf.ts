@@ -3,7 +3,7 @@ import {resolve} from 'node:path';
 import type {ReportData} from './reports.js';
 import {formatBeijingDateTime} from './time.js';
 
-const labels:Record<string,string>={active:'有效',upcoming:'未生效',expired:'已到期',voided:'已作废',none:'无会员卡'};
+const labels:Record<string,string>={active:'有效',upcoming:'未生效',expired:'已到期',voided:'已作废',paused:'已暂停',returned:'已退卡',none:'无会员卡'};
 const date=(v:string)=>v.replaceAll('-','/');
 const kind=(v:string)=>v==='year'?'年卡':'月卡';
 export async function renderReportPdf(data:ReportData,type:'members'|'monthly',logo:Buffer):Promise<Buffer>{
@@ -38,19 +38,21 @@ export async function renderReportPdf(data:ReportData,type:'members'|'monthly',l
   if(type==='members'){
     title('全部会员名单');
     paragraph('全部 '+data.current.total+' 人  ·  有效 '+data.current.active+' 人  ·  未生效 '+data.current.upcoming+' 人  ·  已到期 '+data.current.expired+' 人  ·  已作废 '+data.current.voided+' 人'+(data.current.none?'  ·  无会员卡 '+data.current.none+' 人':''));
+    paragraph('已暂停 '+data.current.paused+' 人  ·  已退卡 '+data.current.returned+' 人',9);
     paragraph('包含所有会员，不受列表筛选和分页影响。',9);
     table(['姓名','会员号码','手机号','卡种','开始日期','到期日期','状态'],[1.5,1.8,1.7,.8,1.4,1.4,.8],data.members.map(m=>[m.name,m.card_number,m.phone,m.card?kind(m.card.kind):'-',m.card?date(m.card.start_date):'-',m.card?date(m.card.end_date):'-',labels[m.status]]));
   }else{
     title(date(data.month)+' 月度经营报表');
-    paragraph('新增按首次开卡开始日期统计；续卡、作废按办理时间统计。所有月份按北京时间划分。',9);
+    paragraph('新增按首次开卡开始日期统计；续卡、暂停、恢复和退卡按办理时间统计。所有月份按北京时间划分。',9);
     const m=data.metrics;
     table(['指标','人数 / 次数','指标','人数 / 次数'],[2,1,2,1],[
       ['新增会员人数',String(m.newMembers),'续卡人数',String(m.renewMembers)],
       ['新办年卡人数',String(m.newYear),'新办月卡人数',String(m.newMonth)],
-      ['续卡次数',String(m.renewCount),'作废次数',String(m.voidCount)],
+      ['续卡次数',String(m.renewCount),'退卡次数',String(m.returnCount)],
+      ['暂停次数',String(m.pauseCount),'恢复次数',String(m.resumeCount)],
       ['续年卡次数',String(m.renewYear),'续月卡次数',String(m.renewMonth)],
       ['未到期续卡人数',String(m.early),'到期后续卡人数',String(m.late)],
-      ['作废后重新开卡人数',String(m.reopened),'未分类续卡次数',String(m.unclassified)]
+      ['退卡/作废后重新开卡',String(m.reopened),'未分类续卡次数',String(m.unclassified)]
     ]);
     paragraph('续卡人数按会员去重；次数逐次统计。同一会员可能进入不同续卡时机分类，分类人数不能直接相加。缺少原卡快照的续卡列为未分类。',9);
     paragraph('首次开卡历史不足：'+data.unknownFirst+' 位会员未计入新增统计。首次记录缺失时使用最早迁移卡片记录。已发生的办卡及续卡不会因后续作废而扣减。',9);
@@ -68,6 +70,7 @@ export async function renderReportPdf(data:ReportData,type:'members'|'monthly',l
     paragraph('以下为截至 '+formatBeijingDateTime(data.generatedAt)+' 的当前情况，不是所选月份的月末快照。',9);
     table(['全部会员','有效','未生效','已到期','已作废'],[1,1,1,1,1],[[data.current.total,data.current.active,data.current.upcoming,data.current.expired,data.current.voided].map(String)]);
     paragraph('有效会员：年卡 '+data.current.activeYear+' 人，月卡 '+data.current.activeMonth+' 人。'+(data.current.none?'无会员卡 '+data.current.none+' 人。':''));
+    paragraph('已暂停 '+data.current.paused+' 人，已退卡 '+data.current.returned+' 人。暂停和退卡会员不计入有效会员及到期跟进名单。',9);
     title('即将到期 · '+data.expiring.length+' 人');
     paragraph('仅包含当前有效会员，年卡提前30天、月卡提前7天，包含到期当天。',9);
     const follow=(list:any[],expired=false)=>table(['姓名','会员号码','手机号','卡种','到期日期',expired?'过期天数':'状态'],[1.1,1.55,1.55,.6,1.25,.85],list.map(m=>[m.name,m.card_number,m.phone,kind(m.card.kind),date(m.card.end_date),expired?String(m.expiredDays):'有效']));

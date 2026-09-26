@@ -87,7 +87,7 @@ test('Excel template and validation use the current configured duration',async()
 
 test('Full Excel backup saves locally and restores members atomically',async()=>{
   const before=Number((await db.query('SELECT count(*)::int AS n FROM members')).rows[0].n),created=await call('/admin/backup/run','POST');assert.equal(created.status,201,JSON.stringify(created.data));
-  const bytes=await readFile(created.data.job.filePath);const book=new ExcelJS.Workbook();await book.xlsx.load(bytes);for(const name of ['备份信息','门店设置','会员档案','当前会员卡','会员卡历史'])assert.ok(book.getWorksheet(name));assert.equal(book.getWorksheet('操作记录'),undefined);assert.equal(book.getWorksheet('备份信息')!.getCell('B2').value,'2');
+  const bytes=await readFile(created.data.job.filePath);const book=new ExcelJS.Workbook();await book.xlsx.load(bytes);for(const name of ['备份信息','门店设置','会员档案','当前会员卡','会员卡历史'])assert.ok(book.getWorksheet(name));assert.equal(book.getWorksheet('操作记录'),undefined);assert.equal(book.getWorksheet('备份信息')!.getCell('B2').value,'3');
   await create('year',370);assert.equal(Number((await db.query('SELECT count(*)::int AS n FROM members')).rows[0].n),before+1);
   const form=new FormData();form.append('file',new Blob([new Uint8Array(bytes)]),'backup.xlsx');const restored=await call('/admin/backup/restore','POST',form);assert.equal(restored.status,201,JSON.stringify(restored.data));
   assert.equal(Number((await db.query('SELECT count(*)::int AS n FROM members')).rows[0].n),before);
@@ -106,11 +106,20 @@ test('Member numbers use a shared monthly sequence',async()=>{
 });
 
 test('Legacy v1 backups restore while ignoring their operation sheet',async()=>{
-  const backups=app.get(BackupsService),legacy=await backups.workbook();legacy.getWorksheet('备份信息')!.getCell('B2').value='1';legacy.getWorksheet('会员档案')!.getCell('D1').value='会员卡号';
+  const backups=app.get(BackupsService),legacy=await backups.workbook();legacy.getWorksheet('备份信息')!.getCell('B2').value='1';legacy.getWorksheet('会员档案')!.getCell('D1').value='会员卡号';const legacyCards=legacy.getWorksheet('当前会员卡')!;legacyCards.getCell('F1').value='是否作废';legacyCards.getCell('G1').value='作废时间';legacyCards.getCell('H1').value='作废原因';legacyCards.spliceColumns(12,4);
   const operations=legacy.addWorksheet('操作记录');operations.addRow(['ID','会员ID','操作','操作者','详情','操作时间']);operations.addRow(['fb3b160b-8591-4824-b558-455a62c77ffc','','legacy_action','owner','{}','2025-01-01T00:00:00.000Z']);
   const before=Number((await db.query('SELECT count(*)::int AS n FROM audit_logs')).rows[0].n);await backups.restore(Buffer.from(await legacy.xlsx.writeBuffer()));
   assert.equal(Number((await db.query("SELECT count(*)::int AS n FROM audit_logs WHERE action='legacy_action'")).rows[0].n),0);assert.ok(Number((await db.query('SELECT count(*)::int AS n FROM audit_logs')).rows[0].n)>=before);
   for(const row of (await db.query('SELECT card_number FROM members')).rows)assert.match(row.card_number,/^Y\d{10}$/);
+});
+
+test('Legacy v2 backup keeps original member numbers and dates',async()=>{
+  const backups=app.get(BackupsService),book=await backups.workbook();book.getWorksheet('备份信息')!.getCell('B2').value='2';
+  const cards=book.getWorksheet('当前会员卡')!;cards.getCell('F1').value='是否作废';cards.getCell('G1').value='作废时间';cards.getCell('H1').value='作废原因';cards.spliceColumns(12,4);
+  const before=(await db.query('SELECT id,phone,card_number FROM members ORDER BY id')).rows;
+  await backups.restore(Buffer.from(await book.xlsx.writeBuffer()));
+  assert.deepEqual((await db.query('SELECT id,phone,card_number FROM members ORDER BY id')).rows,before);
+  assert.equal((await db.query('SELECT count(*)::int AS n FROM memberships WHERE paused_on IS NOT NULL OR returned_at IS NOT NULL OR pause_count<>0')).rows[0].n,0);
 });
 
 test('Operation history flushes to monthly UTF-8 logs and is not exported',async()=>{
@@ -125,4 +134,63 @@ test('Report endpoints return consistent monthly data and valid PDF documents',a
   const month=todayShanghai().slice(0,7),json=await call(`/admin/reports/monthly?month=${month}`);assert.equal(json.status,200,JSON.stringify(json.data));assert.equal(json.data.month,month);assert.equal(typeof json.data.current.total,'number');assert.ok(Array.isArray(json.data.trend));assert.equal(json.data.trend.length,12);
   for(const path of ['/admin/reports/members.pdf',`/admin/reports/monthly.pdf?month=${month}`]){const pdf=await call(path);assert.equal(pdf.status,200);assert.equal(pdf.res.headers.get('content-type'),'application/pdf');assert.equal(pdf.data.subarray(0,5).toString(),'%PDF-');}
   assert.equal((await call('/admin/reports/monthly?month=invalid')).status,400);
+});
+
+test('Pause requires a note; concurrent requests only count once and resume extends the same card',async()=>{
+  const today=todayShanghai();
+  const r=await call('/admin/members','POST',{name:'暂停测试',phone:phone(),kind:'month',startDate:addDays(today,-60),endDate:today,cardRemark:'测试历史期限',note:''});assert.equal(r.status,201);
+  const id=r.data.id,path=`/admin/members/${id}/card`,before=(await call(`/admin/members/${id}`)).data;
+  assert.equal((await call(path+'/pause','POST',{remark:'   ',version:before.card.version})).status,400);
+  const requests=await Promise.all([1,2].map(()=>call(path+'/pause','POST',{remark:'  出差暂停  ',version:before.card.version})));
+  assert.deepEqual(requests.map(r=>r.status).sort(),[201,409]);
+  let card=(await call(`/admin/members/${id}`)).data.card;assert.equal(card.pause_count,1);assert.equal(card.status,'paused');
+  assert.equal((await call(`/admin/members/${id}`)).data.cardHistory[0].remark,'出差暂停');
+  assert.equal((await call('/admin/members?status=paused')).data.items.some((m:any)=>m.id===id),true);
+  assert.equal((await call('/admin/members?expiring=true')).data.items.some((m:any)=>m.id===id),false);
+  assert.equal((await call(path+'/renew','POST',{kind:'month',startDate:card.start_date,endDate:addDays(card.end_date,35),remark:'',version:card.version})).status,409);
+  assert.equal((await call(path,'PATCH',{kind:'month',startDate:card.start_date,endDate:card.end_date,remark:'',version:card.version})).status,409);
+  await db.query('UPDATE memberships SET paused_on=$2 WHERE member_id=$1',[id,addDays(today,-30)]);
+  const resumed=await Promise.all([1,2].map(()=>call(path+'/resume','POST',{version:card.version,asOf:today})));
+  assert.deepEqual(resumed.map(r=>r.status).sort(),[201,409]);
+  card=(await call(`/admin/members/${id}`)).data.card;assert.equal(card.id,before.card.id);assert.equal(card.start_date,before.card.start_date);assert.equal(card.end_date,addDays(before.card.end_date,30));assert.equal(card.total_paused_days,30);
+  assert.equal((await call(path+'/pause','POST',{remark:'第二次暂停',version:card.version})).status,201);
+  card=(await call(`/admin/members/${id}`)).data.card;assert.equal(card.pause_count,2);
+  assert.equal((await call(path+'/resume','POST',{version:card.version,asOf:addDays(today,-1)})).status,409);
+  assert.equal((await call(path+'/resume','POST',{version:card.version,asOf:today})).status,201);
+  const final=(await call(`/admin/members/${id}`)).data;assert.equal(final.card.end_date,card.end_date);assert.equal(final.card.total_paused_days,30);assert.equal(final.cardHistory.filter((e:any)=>e.event_type==='paused').length,2);assert.equal(final.cardHistory.filter((e:any)=>e.event_type==='resumed').length,2);
+});
+
+test('Only active cards can pause; return records server-calculated refund and guards repeated submission',async()=>{
+  const today=todayShanghai(),r=await call('/admin/members','POST',{name:'退卡测试',phone:phone(),kind:'month',startDate:addDays(today,-13),endDate:addDays(today,22),cardRemark:'',note:''});assert.equal(r.status,201);
+  const id=r.data.id,path=`/admin/members/${id}/card`,before=(await call(`/admin/members/${id}`)).data;
+  const quote=(await call(path+'/return-estimate')).data;assert.equal(quote.usedDays,13);assert.equal(quote.estimatedRefund,57);
+  assert.equal((await call(path+'/return','POST',{reason:'  ',version:quote.version,asOf:today})).status,400);
+  assert.equal((await call(path+'/return','POST',{reason:'退卡',version:quote.version,asOf:addDays(today,-1)})).status,409);
+  const result=await call(path+'/return','POST',{reason:'  已核实退款约定  ',version:quote.version,asOf:today});assert.equal(result.status,201);assert.equal(result.data.refund.estimatedRefund,57);
+  assert.equal((await call(path+'/return','POST',{reason:'重复',version:quote.version,asOf:today})).status,409);
+  let detail=(await call(`/admin/members/${id}`)).data;assert.equal(detail.card.status,'returned');assert.equal(detail.card.end_date,before.card.end_date);assert.equal(detail.cardHistory[0].detail.refund.estimatedRefund,57);assert.equal(detail.cardHistory[0].remark,'已核实退款约定');
+  assert.equal((await call(path+'/pause','POST',{remark:'不允许',version:detail.card.version})).status,409);
+  assert.equal((await call('/admin/members?status=returned')).data.items.some((m:any)=>m.id===id),true);
+  await call(path+'/renew','POST',{kind:'month',startDate:today,endDate:addDays(today,35),remark:'',version:detail.card.version});detail=(await call(`/admin/members/${id}`)).data;assert.equal(detail.card.status,'active');assert.equal(detail.card.returned_at,null);assert.equal(detail.cardHistory.some((e:any)=>e.event_type==='returned'),true);
+  for(const offset of [-80,1]){
+    const m=await call('/admin/members','POST',{name:'不可暂停',phone:phone(),kind:'month',startDate:addDays(today,offset),endDate:addDays(today,offset+35),cardRemark:'',note:''});assert.equal(m.status,201);
+    assert.equal((await call(`/admin/members/${m.data.id}/card/pause`,'POST',{remark:'测试',version:1})).status,409);
+  }
+});
+
+test('v3 backup restores pending pauses, counts, return snapshots and original member numbers',async()=>{
+  const first=await create('month',35),path=`/admin/members/${first.id}/card`;
+  await call(path+'/pause','POST',{version:1,remark:'等待恢复'});
+  const second=await create('year',370),quote=(await call(`/admin/members/${second.id}/card/return-estimate`)).data;
+  await call(`/admin/members/${second.id}/card/return`,'POST',{version:quote.version,asOf:quote.asOf,reason:'测试退卡'});
+  const expected=(await call(`/admin/members/${first.id}`)).data,returned=(await call(`/admin/members/${second.id}`)).data;
+  const backups=app.get(BackupsService),workbook=await backups.workbook(),buffer=Buffer.from(await workbook.xlsx.writeBuffer());
+  const bad=await backups.workbook();bad.getWorksheet('当前会员卡')!.getCell('M2').value='-1';
+  await assert.rejects(backups.restore(Buffer.from(await bad.xlsx.writeBuffer())),/暂停次数/);
+  assert.deepEqual((await call(`/admin/members/${first.id}`)).data,expected);
+  await call(path+'/resume','POST',{version:expected.card.version,asOf:todayShanghai()});
+  await backups.restore(buffer);
+  assert.deepEqual((await call(`/admin/members/${first.id}`)).data,expected);assert.deepEqual((await call(`/admin/members/${second.id}`)).data,returned);
+  assert.equal((await call(path+'/resume','POST',{version:expected.card.version,asOf:todayShanghai()})).status,201);
+  const jobs=await Promise.all([backups.createLocal('manual'),backups.createLocal('manual')]);assert.notEqual(jobs[0].job.filePath,jobs[1].job.filePath);
 });

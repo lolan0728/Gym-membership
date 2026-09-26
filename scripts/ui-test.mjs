@@ -1,19 +1,26 @@
 import {chromium} from '@playwright/test';
-import {readFile,mkdir} from 'node:fs/promises';
+import {readFile,mkdir,mkdtemp,rm,writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
 import {createServer as createNetServer} from 'node:net';
 import assert from 'node:assert/strict';
 const root=resolve(import.meta.dirname,'..');
-const credentials=await readFile(resolve(root,'.local-credentials.txt'),'utf8');
-const password=credentials.match(/管理员密码：(.+)/)?.[1];
-if(!password)throw new Error('Run npm run setup:local first');
+const password=process.env.UI_BASE_URL?(await readFile(resolve(root,'.local-credentials.txt'),'utf8')).match(/管理员密码：(.+)/)?.[1]:'Ui-Test-Password-123';
+if(!password)throw new Error('Missing UI test password');
 await mkdir(resolve(root,'test-results'),{recursive:true});
-let apiApp,vite,fixtureDb,historyFixture;
+let apiApp,vite,fixtureDb,historyFixture,uiDataDirectory;
 let baseUrl=process.env.UI_BASE_URL;
 if(!baseUrl){
+  uiDataDirectory=await mkdtemp(resolve(tmpdir(),'joyfit-ui-'));
+  Object.assign(process.env,{NODE_ENV:'test',DESKTOP_MODE:'true',DB_DRIVER:'pglite',PGLITE_PATH:'memory://',STORAGE_DRIVER:'local',LOCAL_STORAGE_PATH:resolve(uiDataDirectory,'uploads'),JOYFIT_BACKUP_PATH:resolve(uiDataDirectory,'backups'),JOYFIT_OPERATION_LOG_PATH:resolve(uiDataDirectory,'logs')});
   process.chdir(resolve(root,'apps/api'));
   const {createApp}=await import('../apps/api/dist/main.js');apiApp=await createApp();await apiApp.listen(0,'127.0.0.1');const apiUrl=await apiApp.getUrl();
   const {Db}=await import('../apps/api/dist/db.js');fixtureDb=apiApp.get(Db);
+  const {hashPassword}=await import('../apps/api/dist/security.js');const {insertMember}=await import('../apps/api/dist/members.js');const {todayShanghai,addDays}=await import('../apps/api/dist/domain.js');
+  await fixtureDb.query('INSERT INTO administrators(id,password_hash) VALUES(1,$1)',[await hashPassword(password)]);
+  const today=todayShanghai();
+  for(let i=0;i<13;i++)await fixtureDb.tx(q=>insertMember(q,{name:i===12?'暂停流程测试':`测试会员${i+1}`,phone:`1390000${String(i+1).padStart(4,'0')}`,kind:i%2?'month':'year',startDate:addDays(today,-60),endDate:addDays(today,i===2?-5:i===1?3:120+i),note:'仅用于自动化测试',cardRemark:'测试期限'}));
+
   const fixture=(await fixtureDb.query(`SELECT e.id,e.remark,e.event_type,e.selected_kind,m.card_number FROM membership_events e JOIN members m ON m.id=e.member_id ORDER BY m.created_at DESC,e.created_at DESC LIMIT 1`)).rows[0];
   if(fixture){historyFixture=fixture;await fixtureDb.query("UPDATE membership_events SET remark=$2,event_type='renewed',selected_kind='month' WHERE id=$1",[fixture.id,'这是一条用于检查长备注折叠与展开功能的测试内容。'.repeat(8)]);}
   process.chdir(root);
@@ -58,7 +65,7 @@ try{
   if(historyFixture){await page.getByPlaceholder('搜索姓名、手机号或会员号码').fill(historyFixture.card_number);const fixtureRow=page.locator('.members-table tbody tr').filter({hasText:historyFixture.card_number});await fixtureRow.waitFor();await fixtureRow.click();await page.getByText('续月卡',{exact:true}).waitFor();assert.equal(await page.locator('.history-record .kind-badge').count(),0);const remark=page.locator('.history-record .event-remark').first(),remarkText=remark.locator('span');await remarkText.waitFor();assert.ok((await remarkText.innerText()).startsWith('备注：'));assert.equal(await remark.evaluate(element=>getComputedStyle(element).fontSize),'11px');assert.ok(await remarkText.evaluate(element=>element.classList.contains('collapsed')));await remark.getByRole('button',{name:'展开全部'}).click();assert.equal(await remarkText.evaluate(element=>element.classList.contains('collapsed')),false);await remark.getByRole('button',{name:'收起'}).click();assert.ok(await remarkText.evaluate(element=>element.classList.contains('collapsed')));await page.screenshot({path:resolve(root,'test-results/member-history.png'),fullPage:true});await page.locator('.el-drawer__close-btn').click();await page.getByPlaceholder('搜索姓名、手机号或会员号码').fill('');await page.locator('.members-table .member-identity').first().waitFor();}
   const activeRow=page.locator('.members-table tbody tr').filter({has:page.locator('.member-status.active')}).first();await activeRow.click();
   assert.equal(await page.getByRole('tab',{name:'操作记录'}).count(),0,'Audit logs must remain hidden from the member detail drawer');
-  const actions=page.locator('.record-actions .el-button');assert.equal(await actions.first().innerText(),'作废会员卡');assert.match(await actions.first().evaluate(element=>getComputedStyle(element).backgroundColor),/rgb\(199, 53, 61\)/);assert.equal(await actions.nth(1).innerText(),'修改卡片');
+  const actions=page.locator('.record-actions .el-button');assert.equal(await actions.first().innerText(),'退卡');assert.match(await actions.first().evaluate(element=>getComputedStyle(element).backgroundColor),/rgb\(199, 53, 61\)/);assert.equal(await actions.last().innerText(),'修改卡片');
   await page.getByRole('button',{name:'办理续卡',exact:true}).click();
   await page.getByText('原到期日期',{exact:true}).waitFor();await page.getByText('新到期日期',{exact:true}).waitFor();await page.locator('.el-dialog:visible').getByText('备注（选填）',{exact:true}).waitFor();
   assert.ok(await page.getByText('原到期日期',{exact:true}).locator('..').locator('input').isDisabled());
@@ -95,6 +102,37 @@ try{
   await page.getByPlaceholder('搜索姓名、手机号或会员号码').fill('');await page.locator('.members-table .member-identity').first().waitFor();
   await page.setViewportSize({width:1024,height:900});await page.screenshot({path:resolve(root,'test-results/tablet.png'),fullPage:true});
   const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth);assert.equal(overflow,false,'Page must fit the viewport');
-  await page.getByRole('button',{name:'退出登录',exact:true}).click();await page.getByRole('heading',{name:'欢迎回到悦体健身'}).waitFor();
-  assert.deepEqual(errors,[]);console.log('Browser checks passed: sidebar count removed, PDF report dashboard, void action styling, card status, renewal history, responsive layout, logout.');
-}finally{await browser.close();if(historyFixture&&fixtureDb)await fixtureDb.query('UPDATE membership_events SET remark=$2,event_type=$3,selected_kind=$4 WHERE id=$1',[historyFixture.id,historyFixture.remark,historyFixture.event_type,historyFixture.selected_kind]);await vite?.close();await apiApp?.close();}
+
+  if(fixtureDb){
+    await page.setViewportSize({width:1400,height:900});
+    const captureLifecycle=async name=>{
+      await page.waitForFunction(()=>document.querySelectorAll('.el-message').length===0);
+      await page.waitForFunction(()=>!document.querySelector('[class*="dialog-fade-enter"], [class*="dialog-fade-leave"]'));
+      await page.screenshot({path:resolve(root,`test-results/${name}.png`),fullPage:true,animations:'disabled'});
+    };
+    await page.getByPlaceholder('搜索姓名、手机号或会员号码').fill('暂停流程测试');
+    const lifecycleRow=page.locator('.members-table tbody tr').filter({hasText:'暂停流程测试'});await lifecycleRow.waitFor();await lifecycleRow.click();
+    await page.getByRole('button',{name:'暂停会员卡',exact:true}).click();const lifecycle=page.locator('.lifecycle-dialog:visible');
+    await lifecycle.getByText('该会员已经暂停过 0 次，本次为第 1 次。',{exact:true}).waitFor();
+    await lifecycle.getByRole('button',{name:'确认暂停',exact:true}).click();await page.getByText('请填写暂停备注',{exact:true}).waitFor();
+    await lifecycle.getByPlaceholder('请说明暂停原因').fill('出差一个月，返回后恢复');
+    await captureLifecycle('card-pause');
+    await lifecycle.getByRole('button',{name:'确认暂停',exact:true}).click();await lifecycle.waitFor({state:'hidden'});
+    await page.locator('.pause-summary').waitFor();assert.ok(await page.getByRole('button',{name:'办理续卡',exact:true}).isDisabled());
+    await page.getByRole('button',{name:'恢复会员卡',exact:true}).click();await lifecycle.getByRole('button',{name:'确认恢复',exact:true}).waitFor();await captureLifecycle('card-resume');
+    await lifecycle.getByRole('button',{name:'确认恢复',exact:true}).click();await lifecycle.waitFor({state:'hidden'});
+    await page.getByRole('button',{name:'暂停会员卡',exact:true}).click();await lifecycle.getByText('该会员已经暂停过 1 次，本次为第 2 次。',{exact:true}).waitFor();await lifecycle.getByRole('button',{name:'取消',exact:true}).click();
+    await page.getByRole('button',{name:'退卡',exact:true}).click();await lifecycle.getByText('估算退款额',{exact:true}).waitFor();
+    await lifecycle.getByPlaceholder('请说明退卡原因及线下退款约定').fill('会员申请退卡，线下核实退款');
+    await captureLifecycle('card-return');
+    await lifecycle.getByRole('button',{name:'确认退卡',exact:true}).click();await lifecycle.waitFor({state:'hidden'});await page.locator('.current-card .member-status.returned').waitFor();
+    await page.locator('.el-drawer__close-btn').click();
+    const snapshot=(await fixtureDb.query("SELECT id FROM members WHERE name='测试会员5'")).rows[0];
+    const {MembersService}=await import('../apps/api/dist/members.js');await apiApp.get(MembersService).pauseCard(snapshot.id,{version:1,remark:'报表暂停样本'});
+    const {ReportsService}=await import('../apps/api/dist/reports.js');await mkdir(resolve(root,'tmp/pdfs'),{recursive:true});
+    const {todayShanghai}=await import('../apps/api/dist/domain.js');
+    for(const type of ['members','monthly'])await writeFile(resolve(root,`tmp/pdfs/v1.3.0-${type}.pdf`),await apiApp.get(ReportsService).pdf(type,todayShanghai().slice(0,7)));
+  }
+await page.getByRole('button',{name:'退出登录',exact:true}).click();await page.getByRole('heading',{name:'欢迎回到悦体健身'}).waitFor();
+  assert.deepEqual(errors,[]);console.log('Browser checks passed: membership management, pause/resume/return dialogs, mandatory remarks, refund estimate, PDF reports, backup settings, responsive layout and logout.');
+}finally{await browser.close();if(historyFixture&&fixtureDb)await fixtureDb.query('UPDATE membership_events SET remark=$2,event_type=$3,selected_kind=$4 WHERE id=$1',[historyFixture.id,historyFixture.remark,historyFixture.event_type,historyFixture.selected_kind]);await vite?.close();await apiApp?.close();if(uiDataDirectory)await rm(uiDataDirectory,{recursive:true,force:true});}

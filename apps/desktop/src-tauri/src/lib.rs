@@ -381,7 +381,8 @@ fn start_server(app: &tauri::AppHandle) -> Result<Arc<DesktopState>, String> {
     });
     let http = client()?;
     let mut ready = false;
-    for _ in 0..100 {
+    // Leave time for a verified pre-upgrade database snapshot on slower shop PCs.
+    for _ in 0..600 {
         if http
             .get(format!("{base_url}/api/health"))
             .send()

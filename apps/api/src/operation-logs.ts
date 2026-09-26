@@ -8,6 +8,7 @@ import { formatBeijingDateTime } from './time.js';
 const labels:Record<string,string>={
   desktop_initialized:'完成首次设置',member_created:'新增会员',member_updated:'修改会员资料',
   card_renewed:'会员续卡',card_updated:'修改会员卡',card_voided:'作废会员卡',
+  card_paused:'暂停会员卡',card_resumed:'恢复会员卡',card_returned:'退卡',
   import_committed:'批量导入会员',settings_updated:'修改门店设置',logo_updated:'更新门店Logo',
   password_changed:'修改管理员密码',backup_settings_updated:'修改备份设置',backup_restored:'恢复完整备份',
   binding_reset:'重置微信绑定',wechat_bound:'绑定微信'

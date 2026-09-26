@@ -2,7 +2,7 @@ import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { Pool, types } from 'pg';
 import { PGlite } from '@electric-sql/pglite';
 import { readFileSync, readdirSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile, rename } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { hashPassword } from './security.js';
 import { desktopMode } from './config.js';
@@ -38,10 +38,21 @@ export class Db implements Queryable, OnModuleInit, OnModuleDestroy {
       .sort((a,b)=>a.version-b.version);
     if (this.local) {
       await this.local.exec('CREATE TABLE IF NOT EXISTS schema_migrations(version integer PRIMARY KEY)');
-      for(const migration of migrations){
-        if((await this.local.query('SELECT 1 FROM schema_migrations WHERE version=$1',[migration.version])).rows.length)continue;
-        await this.local.exec(readFileSync(resolve(directory,migration.file),'utf8'));
-        await this.local.query('INSERT INTO schema_migrations(version) VALUES($1)',[migration.version]);
+      const applied=(await this.local.query<{version:number}>('SELECT version FROM schema_migrations')).rows.map(r=>r.version);
+      const pending=migrations.filter(m=>!applied.includes(m.version));
+      const dataPath=process.env.PGLITE_PATH;
+      if(desktopMode()&&applied.length&&pending.length&&dataPath&&dataPath!=='memory://'){
+        const snapshotDirectory=resolve(dataPath,'../upgrade-backups');await mkdir(snapshotDirectory,{recursive:true});
+        const file=resolve(snapshotDirectory,`before-v${pending.at(-1)!.version}-${Date.now()}.tar.gz`);
+        const snapshot=await this.local.dumpDataDir('gzip');
+        await writeFile(file+'.tmp',Buffer.from(await snapshot.arrayBuffer()),{flag:'wx'});
+        await rename(file+'.tmp',file);
+      }
+      for(const migration of pending){
+        await this.local.transaction(async tx=>{
+          await tx.exec(readFileSync(resolve(directory,migration.file),'utf8'));
+          await tx.query('INSERT INTO schema_migrations(version) VALUES($1)',[migration.version]);
+        });
       }
     } else {
       const client = await this.pool!.connect();

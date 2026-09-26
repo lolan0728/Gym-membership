@@ -29,6 +29,10 @@
 | POST /admin/members/:id/card/renew | `{kind,startDate,endDate,remark?,version}`；延长或重新启用当前卡 |
 | PATCH /admin/members/:id/card | `{kind,startDate,endDate,remark?,version}`；更正当前未作废卡片 |
 | POST /admin/members/:id/card/void | `{reason}`；作废当前卡并保留历史 |
+| POST /admin/members/:id/card/pause | `{version,remark}`；仅有效卡可暂停，备注必填，累计次数加一 |
+| POST /admin/members/:id/card/resume | `{version,asOf}`；恢复暂停卡，按北京时间实际暂停天数延长原到期日 |
+| GET /admin/members/:id/card/return-estimate | 查询服务端计算的使用天数、百分比、估算退款和卡片版本 |
+| POST /admin/members/:id/card/return | `{version,asOf,reason}`；必填原因，保存服务端计算的退款快照并停用卡片；不执行资金操作 |
 | POST /admin/members/:id/reset-binding | `{reason}`；核实后解绑并撤销旧会话 |
 | GET /admin/imports/template | Excel 模板 |
 | POST /admin/imports/preview | 上传，返回批次 ID、rows、errors、ready/invalid/committed |

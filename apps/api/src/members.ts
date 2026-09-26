@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException, Inject, Inj
 import { randomUUID } from 'node:crypto';
 import { AuthRequest } from './auth.js';
 import { Db, Queryable } from './db.js';
-import { cardRemarkRequired, membershipDays, MembershipDurations, statusOf, todayShanghai } from './domain.js';
+import { addDays, daysBetween, dateSchema, returnEstimate, cardRemarkRequired, membershipDays, MembershipDurations, statusOf, todayShanghai } from './domain.js';
 import { beijingMonth } from './time.js';
 
 export async function audit(q:Queryable,action:string,memberId:string|null,detail:unknown,actor='owner') {
@@ -26,7 +26,7 @@ export async function nextMemberNumber(q:Queryable,monthKey=beijingMonth()){
 const date=(value:string|Date)=>value instanceof Date?value.toISOString().slice(0,10):value.slice(0,10);
 export function displayCard(card:any) {
   if(!card)return null;
-  const normalized={...card,start_date:date(card.start_date),end_date:date(card.end_date)};
+  const normalized={...card,start_date:date(card.start_date),end_date:date(card.end_date),...(card.paused_on?{paused_on:date(card.paused_on)}:{})};
   return {...normalized,status:statusOf(normalized)};
 }
 
@@ -60,10 +60,11 @@ export class MembersService {
     const today=todayShanghai();
     const {rows}=await this.db.query(`SELECT
       (SELECT count(*)::int FROM members) AS total,
-      (SELECT count(*)::int FROM memberships WHERE voided_at IS NULL AND start_date<=$1 AND end_date>=$1) AS active,
-      (SELECT count(*)::int FROM memberships WHERE voided_at IS NULL AND start_date<=$1 AND end_date>=$1
+      (SELECT count(*)::int FROM memberships WHERE voided_at IS NULL AND paused_on IS NULL AND start_date<=$1 AND end_date>=$1) AS active,
+      (SELECT count(*)::int FROM memberships WHERE voided_at IS NULL AND paused_on IS NULL AND start_date<=$1 AND end_date>=$1
         AND ((kind='year' AND end_date<=$1::date+30) OR (kind='month' AND end_date<=$1::date+7))) AS expiring,
-      (SELECT count(*)::int FROM memberships WHERE voided_at IS NULL AND end_date<$1) AS expired`,[today]);
+      (SELECT count(*)::int FROM memberships WHERE voided_at IS NULL AND paused_on IS NULL AND end_date<$1) AS expired,
+      (SELECT count(*)::int FROM memberships WHERE paused_on IS NOT NULL AND voided_at IS NULL) AS paused`,[today]);
     return rows[0];
   }
 
@@ -74,10 +75,10 @@ export class MembersService {
       conditions.push(`(m.name ILIKE $${values.length} OR m.phone LIKE $${values.length} OR m.card_number ILIKE $${values.length})`);
     }
     const cardConditions:string[]=['c.member_id=m.id'];
-    if(input.status)cardConditions.push({active:'c.voided_at IS NULL AND c.start_date<=$1 AND c.end_date>=$1',upcoming:'c.voided_at IS NULL AND c.start_date>$1',expired:'c.voided_at IS NULL AND c.end_date<$1',voided:'c.voided_at IS NOT NULL'}[input.status]!);
+    if(input.status)cardConditions.push({active:'c.voided_at IS NULL AND c.paused_on IS NULL AND c.start_date<=$1 AND c.end_date>=$1',upcoming:'c.voided_at IS NULL AND c.paused_on IS NULL AND c.start_date>$1',expired:'c.voided_at IS NULL AND c.paused_on IS NULL AND c.end_date<$1',voided:'c.voided_at IS NOT NULL AND c.returned_at IS NULL',returned:'c.returned_at IS NOT NULL',paused:'c.paused_on IS NOT NULL AND c.voided_at IS NULL'}[input.status]!);
     if(input.endFrom){values.push(input.endFrom);cardConditions.push(`c.end_date>=$${values.length}::date`);}
     if(input.endTo){values.push(input.endTo);cardConditions.push(`c.end_date<=$${values.length}::date`);}
-    if(input.expiring)cardConditions.push(`c.voided_at IS NULL AND c.start_date<=$1 AND c.end_date>=$1 AND ((c.kind='year' AND c.end_date<=$1::date+30) OR (c.kind='month' AND c.end_date<=$1::date+7))`);
+    if(input.expiring)cardConditions.push(`c.voided_at IS NULL AND c.paused_on IS NULL AND c.start_date<=$1 AND c.end_date>=$1 AND ((c.kind='year' AND c.end_date<=$1::date+30) OR (c.kind='month' AND c.end_date<=$1::date+7))`);
     if(cardConditions.length>1)conditions.push(`EXISTS(SELECT 1 FROM memberships c WHERE ${cardConditions.join(' AND ')})`);
     const where=`WHERE $1::date IS NOT NULL ${conditions.length?'AND '+conditions.join(' AND '):''}`;
     const total=(await this.db.query(`SELECT count(*)::int AS n FROM members m ${where}`,values)).rows[0].n;
@@ -91,7 +92,7 @@ export class MembersService {
     const {rows}=await this.db.query('SELECT m.id,m.name,m.phone,m.card_number,m.note,m.version,m.created_at,m.updated_at FROM members m WHERE id=$1',[id]);
     if(!rows[0])throw new NotFoundException('会员不存在');
     const card=(await this.db.query('SELECT * FROM memberships WHERE member_id=$1',[id])).rows[0];
-    const history=await this.db.query(`SELECT id,event_type,selected_kind,kind,start_date,end_date,voided_at,void_reason,remark,duration_days,created_at
+    const history=await this.db.query(`SELECT id,event_type,selected_kind,kind,start_date,end_date,voided_at,void_reason,remark,duration_days,detail,created_at
       FROM membership_events WHERE member_id=$1 ORDER BY created_at DESC,id DESC`,[id]);
     return {...rows[0],card:displayCard(card),cardHistory:displayHistory(history.rows)};
   }
@@ -115,6 +116,7 @@ export class MembersService {
       const before=(await q.query('SELECT * FROM memberships WHERE member_id=$1 FOR UPDATE',[memberId])).rows[0];
       if(!before)throw new NotFoundException('会员卡不存在');
       if(before.version!==input.version)throw new ConflictException('会员卡已更新，请刷新后重试');
+      if(before.paused_on)throw new ConflictException('会员卡暂停中，请先恢复再续卡');
       const current=displayCard(before)!,today=todayShanghai(),unexpired=!before.voided_at&&current.end_date>=today;
       if(unexpired&&input.startDate!==current.start_date)throw new BadRequestException('未到期续卡必须保持原开始日期，确保有效期连续');
       if(unexpired&&input.endDate<=current.end_date)throw new BadRequestException('续卡后的到期日期必须晚于当前到期日期');
@@ -122,7 +124,7 @@ export class MembersService {
       const durations=await membershipDurations(q),durationDays=membershipDays(input.kind,durations);
       if(cardRemarkRequired(renewalBase,input.endDate,input.kind,durations)&&!input.remark)throw new BadRequestException(`续卡期限不是月卡 ${durations.monthCardDays} 天或年卡 ${durations.yearCardDays} 天时，请填写备注`);
       const kind=unexpired&&before.kind==='year'?'year':input.kind;
-      const after=(await q.query(`UPDATE memberships SET kind=$2,start_date=$3,end_date=$4,voided_at=NULL,void_reason=NULL,
+      const after=(await q.query(`UPDATE memberships SET kind=$2,start_date=$3,end_date=$4,voided_at=NULL,void_reason=NULL,returned_at=NULL,
         version=version+1,updated_at=now() WHERE id=$1 RETURNING *`,[before.id,kind,input.startDate,input.endDate])).rows[0];
       await cardEvent(q,memberId,'renewed',after,input.kind,input.remark,{before:current},durationDays);
       await audit(q,'card_renewed',memberId,{selectedKind:input.kind,durationDays,remark:input.remark,before:current,after:displayCard(after)});
@@ -136,7 +138,8 @@ export class MembersService {
       const before=(await q.query('SELECT * FROM memberships WHERE member_id=$1 FOR UPDATE',[memberId])).rows[0];
       if(!before)throw new NotFoundException('会员卡不存在');
       if(before.version!==input.version)throw new ConflictException('会员卡已更新，请刷新后重试');
-      if(before.voided_at)throw new ConflictException('已作废会员卡请通过续卡重新启用');
+      if(before.voided_at)throw new ConflictException('已退卡或历史作废的会员卡请通过续卡重新启用');
+      if(before.paused_on)throw new ConflictException('会员卡暂停中，请先恢复再修改');
       const current=displayCard(before)!;
       if((input.startDate!==current.start_date||input.endDate!==current.end_date)&&!input.remark)throw new BadRequestException('修改会员卡日期时必须填写备注');
       const after=(await q.query('UPDATE memberships SET kind=$2,start_date=$3,end_date=$4,version=version+1,updated_at=now() WHERE id=$1 RETURNING *',[before.id,input.kind,input.startDate,input.endDate])).rows[0];
@@ -146,11 +149,66 @@ export class MembersService {
     });
   }
 
+  async pauseCard(memberId:string,input:{remark:string;version:number}){
+    return this.db.tx(async q=>{
+      const before=await this.lockCard(q,memberId,input.version),today=todayShanghai();
+      if(statusOf(displayCard(before),today)!=='active')throw new ConflictException('只有当前有效的会员卡可以暂停');
+      const after=(await q.query('UPDATE memberships SET paused_on=$2,pause_count=pause_count+1,version=version+1,updated_at=now() WHERE id=$1 RETURNING *',[before.id,today])).rows[0];
+      const detail={pausedOn:today,pauseNumber:after.pause_count,before:displayCard(before)};
+      await cardEvent(q,memberId,'paused',after,undefined,input.remark,detail);
+      await audit(q,'card_paused',memberId,{...detail,remark:input.remark});return displayCard(after);
+    });
+  }
+
+  async resumeCard(memberId:string,input:{version:number;asOf:string}){
+    return this.db.tx(async q=>{
+      const before=await this.lockCard(q,memberId,input.version),today=todayShanghai();
+      if(input.asOf!==today)throw new ConflictException('日期已变化，请重新打开恢复窗口后确认');
+      if(!before.paused_on||before.voided_at)throw new ConflictException('会员卡未暂停，无法恢复');
+      const pausedOn=date(before.paused_on),pausedDays=daysBetween(pausedOn,today);
+      if(pausedDays<0)throw new ConflictException('当前日期早于暂停日期，请检查电脑时间');
+      const originalEnd=date(before.end_date),endDate=addDays(originalEnd,pausedDays);
+      if(!dateSchema.safeParse(endDate).success)throw new BadRequestException('恢复后的到期日期超出支持范围');
+      const after=(await q.query('UPDATE memberships SET paused_on=NULL,end_date=$2,total_paused_days=total_paused_days+$3,version=version+1,updated_at=now() WHERE id=$1 RETURNING *',[before.id,endDate,pausedDays])).rows[0];
+      const detail={pausedOn,resumedOn:today,pausedDays,originalEnd,endDate,pauseNumber:before.pause_count};
+      await cardEvent(q,memberId,'resumed',after,undefined,'',detail);await audit(q,'card_resumed',memberId,detail);return displayCard(after);
+    });
+  }
+
+  private async lockCard(q:Queryable,memberId:string,version:number){
+    if(!(await q.query('SELECT id FROM members WHERE id=$1 FOR UPDATE',[memberId])).rows[0])throw new NotFoundException('会员不存在');
+    const before=(await q.query('SELECT * FROM memberships WHERE member_id=$1 FOR UPDATE',[memberId])).rows[0];
+    if(!before)throw new NotFoundException('会员卡不存在');
+    if(before.version!==version)throw new ConflictException('会员卡已更新，请刷新后重试');
+    return before;
+  }
+
+  async returnQuote(memberId:string){
+    const card=(await this.db.query('SELECT * FROM memberships WHERE member_id=$1',[memberId])).rows[0];
+    if(!card)throw new NotFoundException('会员卡不存在');
+    if(card.voided_at)throw new ConflictException('会员卡已退卡或已作废');
+    return {...returnEstimate(displayCard(card)),version:card.version};
+  }
+
+  async returnCard(memberId:string,input:{reason:string;version:number;asOf:string}){
+    return this.db.tx(async q=>{
+      const before=await this.lockCard(q,memberId,input.version),today=todayShanghai();
+      if(input.asOf!==today)throw new ConflictException('日期已变化，请重新打开退卡窗口核对金额');
+      if(before.voided_at)throw new ConflictException('会员卡已退卡或已作废');
+      const quote=returnEstimate(displayCard(before),today);
+      const after=(await q.query('UPDATE memberships SET voided_at=now(),returned_at=now(),void_reason=$2,paused_on=NULL,version=version+1,updated_at=now() WHERE id=$1 RETURNING *',[before.id,input.reason])).rows[0];
+      const detail={before:displayCard(before),refund:quote};
+      await cardEvent(q,memberId,'returned',after,undefined,input.reason,detail);
+      await audit(q,'card_returned',memberId,{...detail,reason:input.reason});return {card:displayCard(after),refund:quote};
+    });
+  }
+
   async voidCard(memberId:string,reason:string) {
     return this.db.tx(async q=>{
       const before=(await q.query('SELECT * FROM memberships WHERE member_id=$1 FOR UPDATE',[memberId])).rows[0];
       if(!before)throw new NotFoundException('会员卡不存在');
       if(before.voided_at)return {ok:true};
+      if(before.paused_on)throw new ConflictException('会员卡暂停中，请先恢复');
       const after=(await q.query('UPDATE memberships SET voided_at=now(),void_reason=$2,version=version+1,updated_at=now() WHERE id=$1 RETURNING *',[before.id,reason])).rows[0];
       await cardEvent(q,memberId,'voided',after,undefined,'',{before:displayCard(before),reason});
       await audit(q,'card_voided',memberId,{before:displayCard(before),after:displayCard(after),reason});

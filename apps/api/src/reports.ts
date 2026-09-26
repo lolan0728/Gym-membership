@@ -8,7 +8,7 @@ import {addDays,statusOf} from './domain.js';
 import {beijingDay,formatBeijingDateTime} from './time.js';
 import {renderReportPdf} from './report-pdf.js';
 
-export const metricLabels:Record<string,string>={newMembers:'新增会员人数',newYear:'新办年卡人数',newMonth:'新办月卡人数',renewMembers:'续卡人数',renewCount:'续卡次数',renewYear:'续年卡次数',renewMonth:'续月卡次数',early:'未到期续卡人数',late:'到期后续卡人数',reopened:'作废后重新开卡人数',unclassified:'未分类续卡次数',voidCount:'作废次数'};
+export const metricLabels:Record<string,string>={newMembers:'新增会员人数',newYear:'新办年卡人数',newMonth:'新办月卡人数',renewMembers:'续卡人数',renewCount:'续卡次数',renewYear:'续年卡次数',renewMonth:'续月卡次数',early:'未到期续卡人数',late:'到期后续卡人数',reopened:'退卡或作废后重新开卡人数',unclassified:'未分类续卡次数',voidCount:'历史作废次数',pauseCount:'暂停次数',resumeCount:'恢复次数',returnCount:'退卡次数'};
 export function validateMonth(value:unknown){
   if(typeof value!=='string'||!/^20\d{2}-(0[1-9]|1[0-2])$/.test(value))throw new BadRequestException('请选择有效统计月份（2000至2099年）');
   return value;
@@ -30,6 +30,9 @@ export function summarize(members:any[],events:any[],month:string,now=new Date()
     for(const e of events){
       const date=beijingDay(e.created_at);if(date.slice(0,7)!==target)continue;
       if(e.event_type==='voided')values.voidCount++;
+      if(e.event_type==='paused')values.pauseCount++;
+      if(e.event_type==='resumed')values.resumeCount++;
+      if(e.event_type==='returned')values.returnCount++;
       if(e.event_type!=='renewed')continue;
       renewed.add(e.member_id);values.renewCount++;
       const kind=e.selected_kind;if(kind==='year')values.renewYear++;else if(kind==='month')values.renewMonth++;
@@ -43,8 +46,8 @@ export function summarize(members:any[],events:any[],month:string,now=new Date()
     const c=m.card?{...m.card,start_date:day(m.card.start_date),end_date:day(m.card.end_date)}:null;
     return {id:m.id,name:m.name,phone:m.phone,card_number:m.card_number,card:c,status:c?statusOf(c,today):'none'};
   }).sort((a,b)=>a.card_number.localeCompare(b.card_number));
-  const current={total:rows.length,active:0,upcoming:0,expired:0,voided:0,none:0,activeYear:0,activeMonth:0};
-  for(const m of rows){current[m.status as 'active'|'upcoming'|'expired'|'voided'|'none']++;if(m.status==='active'){if(m.card.kind==='year')current.activeYear++;else current.activeMonth++;}}
+  const current={total:rows.length,active:0,upcoming:0,expired:0,voided:0,paused:0,returned:0,none:0,activeYear:0,activeMonth:0};
+  for(const m of rows){current[m.status as 'active'|'upcoming'|'expired'|'voided'|'paused'|'returned'|'none']++;if(m.status==='active'){if(m.card.kind==='year')current.activeYear++;else current.activeMonth++;}}
   const expiring=rows.filter(m=>m.status==='active'&&m.card.end_date<=addDays(today,m.card.kind==='year'?30:7)).sort((a,b)=>a.card.end_date.localeCompare(b.card.end_date)||a.card_number.localeCompare(b.card_number));
   const expired=rows.filter(m=>m.status==='expired'&&m.card.end_date>=addDays(today,-30)).map(m=>({...m,expiredDays:Math.round((Date.parse(today)-Date.parse(m.card.end_date))/86400000)})).sort((a,b)=>a.card.end_date.localeCompare(b.card.end_date)||a.card_number.localeCompare(b.card_number));
   const end=new Date(month+'-01T00:00:00Z'),trend=[];
