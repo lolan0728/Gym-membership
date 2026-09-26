@@ -56,3 +56,13 @@
 ## 迁移与扩展
 
 版本化迁移在 API 启动时按编号执行，PostgreSQL 使用 advisory lock 和 schema_migrations 保证只执行一次。已有迁移文件不可改写；后续结构或默认数据变更新增版本。002 只把旧占位名称和演示名称更新为“悦体健身”，不会覆盖已经自定义的门店名称。`.local-data` 是本地开发数据，不能直接作为正式 PostgreSQL 数据目录挂载。
+
+## 桌面 v1.4.0
+
+- 暂停/恢复 POST 增加 `date: YYYY-MM-DD`；未来日期返回 `{scheduled:true,id}`，立即办理返回当前卡。原 `asOf` 恢复参数保留兼容。
+- `POST /admin/members/:id/appointments/:appointment`：`{date,remark}` 修改未来预约，或 `{cancel:true}` 取消。详情返回 `appointments`。
+- `GET /admin/notifications` 返回 `{items,unread}`；`POST /admin/notifications/read` 传 `{id}` 标为已读，空对象标记全部。接口要求管理员登录。
+- `GET/POST /admin/members/:id/avatar` 读取/上传照片；`POST /admin/members/:id/avatar/remove` 移除。JPEG/PNG最大5MB，输出256×256 JPEG，访问需管理员登录。
+- 退卡估算增加 `elapsedDays`、`pausedDays`；`usedDays` 为扣除暂停后的实际使用天数。既有退款历史快照不变。
+- 自动和手动完整备份使用v4 ZIP，包含v3 Excel、状态JSON、头像和SHA-256清单；恢复接口接受ZIP（最大100MB）或旧Excel（最大25MB），解压总量限制250MB。管理员密码、会话、SMTP授权码、本地日志和Logo不进入备份。
+- 历史Excel导出接口保留兼容，不包含照片和预约，不应作为新版完整备份。

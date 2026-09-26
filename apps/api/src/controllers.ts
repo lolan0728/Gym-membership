@@ -13,6 +13,7 @@ import { cardFields, cardRemarkSchema, createMemberSchema, dateSchema, parse, up
 import { ImportsService } from './imports.js';
 import { audit, MembersService } from './members.js';
 import { hashPassword } from './security.js';
+import { RemindersService } from './reminders.js';
 import { StorageService } from './storage.js';
 
 const cookieOptions=()=>({httpOnly:true,secure:production()&&!desktopMode(),sameSite:'strict' as const,path:'/api/admin',maxAge:12*3600*1000});
@@ -44,12 +45,14 @@ export class PublicController {
 
 @Controller('api/admin')
 export class AdminController {
-  constructor(@Inject(Db)private db:Db,@Inject(AuthService)private auth:AuthService,@Inject(MembersService)private members:MembersService,@Inject(ImportsService)private imports:ImportsService,@Inject(StorageService)private storage:StorageService,@Inject(BackupsService)private backups:BackupsService){}
+  constructor(@Inject(Db)private db:Db,@Inject(AuthService)private auth:AuthService,@Inject(MembersService)private members:MembersService,@Inject(ImportsService)private imports:ImportsService,@Inject(StorageService)private storage:StorageService,@Inject(BackupsService)private backups:BackupsService,@Inject(RemindersService)private reminders:RemindersService){}
   @Post('login') @Public() async login(@Body()body:unknown,@Req()req:Request,@Res({passthrough:true})res:Response){const {password}=parse(z.object({password:z.string().min(1).max(256)}).strict(),body);const token=await this.auth.login(password,req.ip||'unknown');res.cookie('gym_admin',token,cookieOptions());return {ok:true};}
   @Get('session') session(){return {name:'管理员',role:'owner'};}
   @Post('logout') async logout(@Req()req:AuthRequest,@Res({passthrough:true})res:Response){await this.db.query('DELETE FROM sessions WHERE token_hash=$1',[req.auth.tokenHash]);res.clearCookie('gym_admin',cookieOptions());return {ok:true};}
   @Post('password') async password(@Body()body:unknown,@Req()req:AuthRequest,@Res({passthrough:true})res:Response){await this.auth.limit(`password:${req.auth.tokenHash}`,5,900);const input=parse(z.object({current:z.string().max(256),next:z.string().min(8,'新密码至少 8 位').max(128)}).strict(),body);await this.auth.password(input.current,input.next);res.clearCookie('gym_admin',cookieOptions());return {ok:true};}
-  @Get('stats') stats(){return this.members.stats();}
+  @Get('stats') async stats(){await this.reminders.check();return this.members.stats();}
+  @Get('notifications') notifications(){return this.reminders.list();}
+  @Post('notifications/read') readNotifications(@Body()body:unknown){return this.reminders.read(parse(z.object({id:uuidSchema.optional()}).strict(),body).id);}
   @Get('members') list(@Query()query:unknown){return this.members.list(parse(z.object({search:z.string().max(80).optional(),status:z.enum(['active','upcoming','expired','voided','paused','returned']).optional(),endFrom:dateSchema.optional(),endTo:dateSchema.optional(),expiring:z.literal('true').transform(()=>true).optional(),page:z.coerce.number().int().min(1).default(1),pageSize:z.coerce.number().int().min(1).max(100).default(10)}).strict(),query));}
   @Post('members') create(@Body()body:unknown){return this.members.create(parse(createMemberSchema,body));}
   @Get('members/:id') detail(@Param('id')id:string){return this.members.detail(parse(uuidSchema,id));}
@@ -57,8 +60,14 @@ export class AdminController {
   @Post('members/:id/card/renew') renewCard(@Param('id')id:string,@Body()body:unknown){const input=parse(z.object({...cardFields,remark:cardRemarkSchema,version:z.number().int().positive()}).strict().refine(v=>v.endDate>=v.startDate,{message:'到期日期不能早于开始日期'}),body);return this.members.renewCard(parse(uuidSchema,id),input);}
   @Patch('members/:id/card') editCard(@Param('id')id:string,@Body()body:unknown){const input=parse(z.object({...cardFields,remark:cardRemarkSchema,version:z.number().int().positive()}).strict().refine(v=>v.endDate>=v.startDate,{message:'到期日期不能早于开始日期'}),body);return this.members.updateCard(parse(uuidSchema,id),input);}
   @Post('members/:id/card/void') voidCard(@Param('id')id:string,@Body()body:unknown){return this.members.voidCard(parse(uuidSchema,id),parse(reasonSchema,body).reason);}
-  @Post('members/:id/card/pause') pauseCard(@Param('id')id:string,@Body()body:unknown){return this.members.pauseCard(parse(uuidSchema,id),parse(z.object({version:z.number().int().positive(),remark:z.string().trim().min(1,'请填写暂停备注').max(500)}).strict(),body));}
-  @Post('members/:id/card/resume') resumeCard(@Param('id')id:string,@Body()body:unknown){return this.members.resumeCard(parse(uuidSchema,id),parse(z.object({version:z.number().int().positive(),asOf:dateSchema}).strict(),body));}
+  @Post('members/:id/card/pause') pauseCard(@Param('id')id:string,@Body()body:unknown){return this.members.pauseCard(parse(uuidSchema,id),parse(z.object({version:z.number().int().positive(),date:dateSchema.optional(),remark:z.string().trim().min(1,'请填写暂停备注').max(500)}).strict(),body));}
+  @Post('members/:id/card/resume') resumeCard(@Param('id')id:string,@Body()body:unknown){return this.members.resumeCard(parse(uuidSchema,id),parse(z.object({version:z.number().int().positive(),date:dateSchema.optional(),asOf:dateSchema.optional()}).strict(),body));}
+  @Post('members/:id/appointments/:appointment') appointment(@Param('id')id:string,@Param('appointment')appointment:string,@Body()body:unknown){return this.members.appointment(parse(uuidSchema,id),parse(uuidSchema,appointment),parse(z.object({date:dateSchema.optional(),remark:cardRemarkSchema,cancel:z.boolean().optional()}).strict().refine(v=>v.cancel||!!v.date,{message:'请选择预约日期'}),body));}
+  @Get('members/:id/avatar') async avatar(@Param('id')id:string,@Res()res:Response){const member=(await this.db.query('SELECT avatar_key FROM members WHERE id=$1',[parse(uuidSchema,id)])).rows[0];if(!member?.avatar_key)return res.status(404).end();return res.type('image/jpeg').send(await this.storage.get(member.avatar_key));}
+  @Post('members/:id/avatar') @UseInterceptors(upload()) async saveAvatar(@Param('id')id:string,@UploadedFile()file:Express.Multer.File){
+    parse(uuidSchema,id);const key=await this.storage.putAvatar(fileBuffer(file));try{await this.db.tx(async q=>{const row=(await q.query('SELECT id FROM members WHERE id=$1 FOR UPDATE',[id])).rows[0];if(!row)throw new BadRequestException('会员不存在');await q.query('UPDATE members SET avatar_key=$2,version=version+1,updated_at=now() WHERE id=$1',[id,key]);await audit(q,'avatar_updated',id,{});});}catch(e){await this.storage.remove(key).catch(()=>{});throw e;}return {ok:true};
+  }
+  @Post('members/:id/avatar/remove') async removeAvatar(@Param('id')id:string){parse(uuidSchema,id);await this.db.tx(async q=>{await q.query('UPDATE members SET avatar_key=NULL,version=version+1,updated_at=now() WHERE id=$1',[id]);await audit(q,'avatar_removed',id,{});});return {ok:true};}
   @Get('members/:id/card/return-estimate') returnEstimate(@Param('id')id:string){return this.members.returnQuote(parse(uuidSchema,id));}
   @Post('members/:id/card/return') returnCard(@Param('id')id:string,@Body()body:unknown){return this.members.returnCard(parse(uuidSchema,id),parse(z.object({version:z.number().int().positive(),asOf:dateSchema,reason:z.string().trim().min(1,'请填写退卡原因').max(500)}).strict(),body));}
   @Get('imports/template') async template(@Res()res:Response){res.type(BACKUP_MIME).attachment('members-template.xlsx').send(await this.imports.template());}
@@ -73,7 +82,7 @@ export class AdminController {
   @Post('backup/run') runBackup(){return this.backups.createLocal('manual');}
   @Get('backup/jobs') backupJobs(){return this.backups.jobs();}
   @Get('backup/export') async exportBackup(@Res()res:Response){res.type(BACKUP_MIME).attachment(`joyfit-full-backup-${Date.now()}.xlsx`).send(await this.backups.exportBuffer());}
-  @Post('backup/restore') @UseInterceptors(upload(25*1024*1024)) async restoreBackup(@UploadedFile()file:Express.Multer.File){if(!file?.originalname.toLowerCase().endsWith('.xlsx'))throw new BadRequestException('请选择完整备份 .xlsx 文件');return this.backups.restore(fileBuffer(file));}
+  @Post('backup/restore') @UseInterceptors(upload(100*1024*1024)) async restoreBackup(@UploadedFile()file:Express.Multer.File){if(!file||!(/\.(xlsx|zip)$/i.test(file.originalname)))throw new BadRequestException('请选择完整备份ZIP或旧版Excel文件');return this.backups.restore(fileBuffer(file));}
 }
 
 @Controller('api/desktop')

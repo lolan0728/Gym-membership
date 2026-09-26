@@ -42,3 +42,22 @@ test('v1.2.2 upgrade preserves all existing business fields and takes a restorab
     assert.equal((await readdir(join(dir,'upgrade-backups'))).length,1,'Second launch does not repeat upgrade or backup');
   }finally{await db?.onModuleDestroy();if(!old.closed)await old.close();await rm(dir,{recursive:true,force:true});}
 });
+
+
+test('v1.3 pause history migrates without changing cards; malformed history is flagged',async()=>{
+  const db=new PGlite({extensions:{btree_gist}}),directory=resolve(import.meta.dirname,'../migrations');
+  try{
+    for(const file of (await readdir(directory)).filter(x=>/^00[1-8]_/.test(x)).sort())await db.exec(await readFile(join(directory,file),'utf8'));
+    for(const [n,detail]of [[1,{pausedOn:'2026-08-01',resumedOn:'2026-08-31'}],[2,{pausedOn:'2026-99-01',resumedOn:'2026-99-31'}]] as const){
+      const member='10000000-0000-4000-8000-00000000000'+n,card='20000000-0000-4000-8000-00000000000'+n,event='30000000-0000-4000-8000-00000000000'+n;
+      await db.query('INSERT INTO members(id,name,phone,card_number) VALUES($1,$2,$3,$4)',[member,'升级样本'+n,'1390000000'+n,'Y202609000'+n]);
+      await db.query("INSERT INTO memberships(id,member_id,kind,start_date,end_date,pause_count,total_paused_days) VALUES($1,$2,'year','2026-07-01','2027-07-31',1,30)",[card,member]);
+      await db.query("INSERT INTO membership_events(id,member_id,membership_id,event_type,kind,start_date,end_date,detail) VALUES($1,$2,$3,'resumed','year','2026-07-01','2027-07-31',$4)",[event,member,card,JSON.stringify(detail)]);
+    }
+    const before=(await db.query('SELECT id,start_date,end_date,pause_count,total_paused_days FROM memberships ORDER BY id')).rows;
+    await db.exec(await readFile(join(directory,'009_schedules_avatars_notifications.sql'),'utf8'));
+    assert.deepEqual((await db.query('SELECT id,start_date,end_date,pause_count,total_paused_days FROM memberships ORDER BY id')).rows,before);
+    assert.deepEqual((await db.query('SELECT pause_review_required FROM memberships ORDER BY id')).rows,[{pause_review_required:false},{pause_review_required:true}]);
+    assert.equal((await db.query('SELECT count(*)::int AS n FROM pause_intervals')).rows[0]!.n,1);
+  }finally{await db.close();}
+});

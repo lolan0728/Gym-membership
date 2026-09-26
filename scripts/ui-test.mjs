@@ -60,9 +60,9 @@ try{
   const expiredStatus=page.locator('.members-table .member-status.expired').first();await expiredStatus.waitFor();assert.equal(await expiredStatus.evaluate(element=>getComputedStyle(element).backgroundColor),'rgb(107, 114, 128)');
   await page.screenshot({path:resolve(root,'test-results/admin-dashboard.png'),fullPage:true});
   for(const [kind,color] of [['month','rgb(1, 85, 86)'],['year','rgb(27, 33, 31)']]){
-    const row=page.locator('.members-table tbody tr').filter({has:page.locator(`.kind-badge.${kind}`)}).first();await row.click();const card=page.locator(`.member-card.kind-${kind}`);await card.waitFor();const cardBackground=await card.evaluate(element=>getComputedStyle(element).backgroundImage);assert.ok(cardBackground.includes(color));assert.notEqual(await card.locator('.card-status').evaluate(element=>getComputedStyle(element).backgroundColor),'rgba(0, 0, 0, 0)');if(kind==='year'){assert.ok(cardBackground.includes('radial-gradient'));assert.equal(await card.evaluate(element=>getComputedStyle(element).borderColor),'rgb(168, 141, 78)');}await page.locator('.el-drawer__close-btn').click();
+    const row=page.locator('.members-table tbody tr').filter({has:page.locator(`.kind-badge.${kind}`)}).first();await row.click();const card=page.locator(`.member-card.kind-${kind}`);await card.waitFor();const cardBackground=await card.evaluate(element=>getComputedStyle(element).backgroundImage);assert.ok(cardBackground.includes(color));assert.notEqual(await card.locator('.card-status').evaluate(element=>getComputedStyle(element).backgroundColor),'rgba(0, 0, 0, 0)');if(kind==='year'){assert.ok(cardBackground.includes('radial-gradient'));assert.equal(await card.evaluate(element=>getComputedStyle(element).borderColor),'rgb(168, 141, 78)');}await page.locator('.el-drawer__close-btn:visible').click();
   }
-  if(historyFixture){await page.getByPlaceholder('搜索姓名、手机号或会员号码').fill(historyFixture.card_number);const fixtureRow=page.locator('.members-table tbody tr').filter({hasText:historyFixture.card_number});await fixtureRow.waitFor();await fixtureRow.click();await page.getByText('续月卡',{exact:true}).waitFor();assert.equal(await page.locator('.history-record .kind-badge').count(),0);const remark=page.locator('.history-record .event-remark').first(),remarkText=remark.locator('span');await remarkText.waitFor();assert.ok((await remarkText.innerText()).startsWith('备注：'));assert.equal(await remark.evaluate(element=>getComputedStyle(element).fontSize),'11px');assert.ok(await remarkText.evaluate(element=>element.classList.contains('collapsed')));await remark.getByRole('button',{name:'展开全部'}).click();assert.equal(await remarkText.evaluate(element=>element.classList.contains('collapsed')),false);await remark.getByRole('button',{name:'收起'}).click();assert.ok(await remarkText.evaluate(element=>element.classList.contains('collapsed')));await page.screenshot({path:resolve(root,'test-results/member-history.png'),fullPage:true});await page.locator('.el-drawer__close-btn').click();await page.getByPlaceholder('搜索姓名、手机号或会员号码').fill('');await page.locator('.members-table .member-identity').first().waitFor();}
+  if(historyFixture){await page.getByPlaceholder('搜索姓名、手机号或会员号码').fill(historyFixture.card_number);const fixtureRow=page.locator('.members-table tbody tr').filter({hasText:historyFixture.card_number});await fixtureRow.waitFor();await fixtureRow.click();await page.getByText('续月卡',{exact:true}).waitFor();assert.equal(await page.locator('.history-record .kind-badge').count(),0);const remark=page.locator('.history-record .event-remark').first(),remarkText=remark.locator('span');await remarkText.waitFor();assert.ok((await remarkText.innerText()).startsWith('备注：'));assert.equal(await remark.evaluate(element=>getComputedStyle(element).fontSize),'11px');assert.ok(await remarkText.evaluate(element=>element.classList.contains('collapsed')));await remark.getByRole('button',{name:'展开全部'}).click();assert.equal(await remarkText.evaluate(element=>element.classList.contains('collapsed')),false);await remark.getByRole('button',{name:'收起'}).click();assert.ok(await remarkText.evaluate(element=>element.classList.contains('collapsed')));await page.screenshot({path:resolve(root,'test-results/member-history.png'),fullPage:true});await page.locator('.el-drawer__close-btn:visible').click();await page.getByPlaceholder('搜索姓名、手机号或会员号码').fill('');await page.locator('.members-table .member-identity').first().waitFor();}
   const activeRow=page.locator('.members-table tbody tr').filter({has:page.locator('.member-status.active')}).first();await activeRow.click();
   assert.equal(await page.getByRole('tab',{name:'操作记录'}).count(),0,'Audit logs must remain hidden from the member detail drawer');
   const actions=page.locator('.record-actions .el-button');assert.equal(await actions.first().innerText(),'退卡');assert.match(await actions.first().evaluate(element=>getComputedStyle(element).backgroundColor),/rgb\(199, 53, 61\)/);assert.equal(await actions.last().innerText(),'修改卡片');
@@ -71,7 +71,7 @@ try{
   assert.ok(await page.getByText('原到期日期',{exact:true}).locator('..').locator('input').isDisabled());
   const dateControlWidths=await page.locator('.el-dialog:visible .card-date-control').evaluateAll(elements=>elements.map(element=>Math.round(element.getBoundingClientRect().width)));assert.equal(dateControlWidths.length,3);assert.equal(new Set(dateControlWidths).size,1,'Start, original expiry and new expiry controls must have equal widths');
   await page.screenshot({path:resolve(root,'test-results/renewal.png'),fullPage:true});
-  await page.getByRole('button',{name:'取消',exact:true}).click();await page.locator('.el-drawer__close-btn').click();
+  await page.getByRole('button',{name:'取消',exact:true}).click();await page.locator('.el-drawer__close-btn:visible').click();
   // Exercise real read/write UI against the local database, restoring the changed field afterwards.
   await page.locator('.members-table .member-identity').first().click();await page.getByRole('tab',{name:'会员资料'}).click();
   await page.getByRole('button',{name:'编辑会员资料'}).click();
@@ -82,7 +82,7 @@ try{
   await page.locator('.record-card').first().waitFor();assert.match(await page.locator('.record-card>p').first().innerText(),/\d{4}\/\d{2}\/\d{2}/);
   await page.locator('.el-message').last().waitFor({state:'hidden'}).catch(()=>{});
   await page.screenshot({path:resolve(root,'test-results/member-detail.png'),fullPage:true});
-  await page.locator('.el-drawer__close-btn').click();
+  await page.locator('.el-drawer__close-btn:visible').click();
   await page.locator('.sidebar nav button').filter({hasText:'统计报表'}).click();await page.getByRole('heading',{name:'统计报表',exact:true}).waitFor();await page.getByRole('heading',{name:'最近 12 个月趋势'}).waitFor();assert.equal(await page.locator('.trend-item').count(),12);await page.getByText(/即将到期 \d+/).first().waitFor();await page.screenshot({path:resolve(root,'test-results/reports.png'),fullPage:true});
   await page.locator('.sidebar nav button').filter({hasText:'批量导入'}).click();await page.getByRole('heading',{name:'导入会员档案'}).waitFor();
   const download=page.waitForEvent('download');await page.getByRole('button',{name:'下载模板',exact:true}).click();const file=await download;await file.saveAs(resolve(root,'test-results/会员导入模板.xlsx'));
@@ -111,7 +111,18 @@ try{
       await page.screenshot({path:resolve(root,`test-results/${name}.png`),fullPage:true,animations:'disabled'});
     };
     await page.getByPlaceholder('搜索姓名、手机号或会员号码').fill('暂停流程测试');
+    await page.getByRole('button',{name:/日期提醒/}).click();await page.getByRole('heading',{name:'日期提醒',exact:true}).waitFor();await page.locator('.reminder-item').first().waitFor();await page.screenshot({path:resolve(root,'test-results/date-reminders.png'),fullPage:true,animations:'disabled'});await page.locator('.reminder-item').first().click();await page.getByRole('dialog',{name:'日期提醒',exact:true}).waitFor({state:'hidden'});await page.getByRole('heading',{name:'会员详情',exact:true}).waitFor();await page.locator('.el-drawer__close-btn:visible').click();
     const lifecycleRow=page.locator('.members-table tbody tr').filter({hasText:'暂停流程测试'});await lifecycleRow.waitFor();await lifecycleRow.click();
+    await page.getByRole('tab',{name:'会员资料'}).click();await page.getByRole('button',{name:'编辑会员资料'}).click();
+    const sharp=(await import('sharp')).default;const imageBytes=await sharp({create:{width:640,height:480,channels:3,background:'#015556'}}).png().toBuffer();
+    await page.locator('.avatar-editor input[type=file]').setInputFiles({name:'photo.png',mimeType:'image/png',buffer:imageBytes});
+    await page.getByRole('heading',{name:'裁剪会员头像',exact:true}).waitFor();await page.locator('.avatar-crop').waitFor();await page.screenshot({path:resolve(root,'test-results/avatar-crop.png'),fullPage:true,animations:'disabled'});await page.getByRole('button',{name:'使用此头像',exact:true}).click();
+    await page.getByRole('button',{name:'保存修改',exact:true}).click();await page.locator('.detail-heading img.member-avatar').waitFor();await page.getByRole('tab',{name:'会员卡记录'}).click();
+    await page.getByRole('button',{name:'暂停会员卡',exact:true}).click();const tomorrow=new Date();tomorrow.setDate(tomorrow.getDate()+1);const {addDays,todayShanghai}=await import('../apps/api/dist/domain.js');const future=addDays(todayShanghai(),1);
+    const bookingDialog=page.locator('.lifecycle-dialog:visible');await bookingDialog.getByPlaceholder('暂停开始日期').fill(future.replaceAll('-','/'));await bookingDialog.getByPlaceholder('暂停开始日期').press('Enter');await bookingDialog.getByPlaceholder('请说明暂停原因').fill('预约测试');await bookingDialog.getByRole('button',{name:'确认暂停',exact:true}).click();await bookingDialog.waitFor({state:'hidden'});await page.locator('.appointment-item').waitFor();
+    await page.getByRole('button',{name:'修改预约',exact:true}).click();await bookingDialog.getByPlaceholder('暂停开始日期').fill(addDays(future,1).replaceAll('-','/'));await bookingDialog.getByPlaceholder('暂停开始日期').press('Enter');await bookingDialog.getByRole('button',{name:'确认暂停',exact:true}).click();await bookingDialog.waitFor({state:'hidden'});
+    await page.getByRole('button',{name:'取消预约',exact:true}).click();await page.locator('.el-message-box').getByRole('button',{name:'确定',exact:true}).click();await page.locator('.appointment-item').waitFor({state:'hidden'});
+
     await page.getByRole('button',{name:'暂停会员卡',exact:true}).click();const lifecycle=page.locator('.lifecycle-dialog:visible');
     await lifecycle.getByText('该会员已经暂停过 0 次，本次为第 1 次。',{exact:true}).waitFor();
     await lifecycle.getByRole('button',{name:'确认暂停',exact:true}).click();await page.getByText('请填写暂停备注',{exact:true}).waitFor();
@@ -126,12 +137,12 @@ try{
     await lifecycle.getByPlaceholder('请说明退卡原因及线下退款约定').fill('会员申请退卡，线下核实退款');
     await captureLifecycle('card-return');
     await lifecycle.getByRole('button',{name:'确认退卡',exact:true}).click();await lifecycle.waitFor({state:'hidden'});await page.locator('.current-card .member-status.returned').waitFor();
-    await page.locator('.el-drawer__close-btn').click();
+    await page.locator('.el-drawer__close-btn:visible').click();
     const snapshot=(await fixtureDb.query("SELECT id FROM members WHERE name='测试会员5'")).rows[0];
     const {MembersService}=await import('../apps/api/dist/members.js');await apiApp.get(MembersService).pauseCard(snapshot.id,{version:1,remark:'报表暂停样本'});
     const {ReportsService}=await import('../apps/api/dist/reports.js');await mkdir(resolve(root,'tmp/pdfs'),{recursive:true});
-    const {todayShanghai}=await import('../apps/api/dist/domain.js');
-    for(const type of ['members','monthly'])await writeFile(resolve(root,`tmp/pdfs/v1.3.0-${type}.pdf`),await apiApp.get(ReportsService).pdf(type,todayShanghai().slice(0,7)));
+
+    for(const type of ['members','monthly'])await writeFile(resolve(root,`tmp/pdfs/v1.4.0-${type}.pdf`),await apiApp.get(ReportsService).pdf(type,todayShanghai().slice(0,7)));
   }
 await page.getByRole('button',{name:'退出登录',exact:true}).click();await page.getByRole('heading',{name:'欢迎回到悦体健身'}).waitFor();
   assert.deepEqual(errors,[]);console.log('Browser checks passed: membership management, pause/resume/return dialogs, mandatory remarks, refund estimate, PDF reports, backup settings, responsive layout and logout.');

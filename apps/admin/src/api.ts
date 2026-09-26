@@ -1,7 +1,9 @@
 export interface Card {id:string;kind:'year'|'month';start_date:string;end_date:string;status:'active'|'expired'|'upcoming'|'voided'|'paused'|'returned';voided_at:string|null;void_reason?:string;version:number;paused_on:string|null;pause_count:number;total_paused_days:number;returned_at:string|null;}
-export interface ReturnEstimate {asOf:string;startDate:string;usedDays:number;basisDays:number;price:number;usedPercent:number;estimatedRefund:number;version:number;}
+export interface Appointment {id:string;action:'pause'|'resume';effective_date:string;remark:string;status:string;error:string;}
+export interface Reminder {id:string;member_id:string;name:string;card_number:string;title:string;effective_date:string;read_at:string|null;obsolete:boolean;}
+export interface ReturnEstimate {elapsedDays:number;pausedDays:number;asOf:string;startDate:string;usedDays:number;basisDays:number;price:number;usedPercent:number;estimatedRefund:number;version:number;}
 export interface CardHistory extends Card {event_type:'opened'|'renewed'|'updated'|'voided'|'migrated'|'paused'|'resumed'|'returned';selected_kind?:'year'|'month';remark:string;duration_days?:number;created_at:string;detail?:{pausedOn?:string;resumedOn?:string;pausedDays?:number;originalEnd?:string;endDate?:string;pauseNumber?:number;refund?:ReturnEstimate};}
-export interface Member {id:string;name:string;phone:string;card_number:string;note:string;version:number;created_at:string;card:Card|null;cardHistory:CardHistory[];}
+export interface Member {avatar_key?:string|null;appointments?:Appointment[];id:string;name:string;phone:string;card_number:string;note:string;version:number;created_at:string;card:Card|null;cardHistory:CardHistory[];}
 export interface Store {name:string;phone:string;monthCardDays:number;yearCardDays:number;hasLogo:boolean;}
 export interface ImportBatch {id:string;status:string;count:number;rows:any[];errors:{row:number;message:string}[];created_at?:string;committedAt?:string;}
 export interface BackupJob {id:string;filePath:string;fileName:string;dataRevision:number;status:'local_saved'|'sent'|'email_failed';error:string;triggerSource:'manual'|'automatic'|'pre_restore';scheduledDate?:string;createdAt:string;sentAt?:string;}

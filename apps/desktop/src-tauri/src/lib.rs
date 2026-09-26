@@ -142,7 +142,7 @@ fn send_message(
         "这是一封测试邮件。悦体健身Windows单机版已经可以使用QQ邮箱发送每日备份。".to_string()
     } else {
         format!(
-            "悦体健身会员数据已于 {}（北京时间）完成Excel备份。附件可用于完整数据恢复。",
+            "悦体健身会员数据已于 {}（北京时间）完成完整数据备份（包含会员头像）。附件可用于完整数据恢复。",
             now.format("%Y/%m/%d %H:%M:%S")
         )
     };
@@ -150,7 +150,7 @@ fn send_message(
     let message = if let Some(job) = attachment {
         let bytes = fs::read(&job.file_path).map_err(|e| format!("读取备份文件失败：{e}"))?;
         let content_type =
-            ContentType::parse("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            ContentType::parse(if job.file_name.ends_with(".zip") { "application/zip" } else { "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })
                 .map_err(|e| e.to_string())?;
         builder
             .multipart(

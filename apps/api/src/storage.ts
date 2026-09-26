@@ -29,7 +29,7 @@ export class StorageService {
   }
   async putAvatar(buffer:Buffer){
     let data:Buffer;
-    try{const image=await this.readImage(buffer);data=await image.resize(512,512,{fit:'cover',withoutEnlargement:true}).jpeg({quality:85}).toBuffer();}
+    try{const image=await this.readImage(buffer);data=await image.resize(256,256,{fit:'cover'}).jpeg({quality:85}).toBuffer();}
     catch(error){if(error instanceof BadRequestException)throw error;throw new BadRequestException('图片无法读取，请选择有效的 JPEG 或 PNG 图片');}
     return this.save(data,'jpg','image/jpeg');
   }

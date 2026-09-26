@@ -5,6 +5,9 @@ import {mkdtemp,readFile,rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import ExcelJS from 'exceljs';
+import {unpack} from '../src/archive.js';
+import {RemindersService} from '../src/reminders.js';
+import sharp from 'sharp';
 import {createApp} from '../src/main.js';
 import {Db} from '../src/db.js';
 import {columns} from '../src/imports.js';
@@ -71,7 +74,7 @@ test('Configured card durations drive opening, renewal and history snapshots',as
   const start=todayShanghai();assert.equal((await call('/admin/members','POST',{name:'缺少备注',phone:phone(),kind:'month',startDate:start,endDate:addDays(start,30),cardRemark:'',note:''})).status,400);
   const member=await create('month',45),detail=(await call(`/admin/members/${member.id}`)).data;
   assert.match(member.card_number,new RegExp(`^Y${beijingMonth()}\\d{4}$`));
-  assert.equal(detail.card.end_date,addDays(start,45));assert.equal(detail.cardHistory[0].duration_days,45);assert.equal(detail.avatar_key,undefined);assert.equal(detail.bound,undefined);
+  assert.equal(detail.card.end_date,addDays(start,45));assert.equal(detail.cardHistory[0].duration_days,45);assert.equal(detail.avatar_key,null);assert.equal(detail.bound,undefined);
   const renewed=await call(`/admin/members/${member.id}/card/renew`,'POST',{kind:'month',startDate:start,endDate:addDays(detail.card.end_date,45),remark:'',version:detail.card.version});assert.equal(renewed.status,201,JSON.stringify(renewed.data));
   const after=(await call(`/admin/members/${member.id}`)).data;assert.equal(after.cardHistory[0].duration_days,45);
   await call('/admin/settings','PATCH',{name:'悦体健身',phone:'13800138000',monthCardDays:30,yearCardDays:365});
@@ -87,9 +90,9 @@ test('Excel template and validation use the current configured duration',async()
 
 test('Full Excel backup saves locally and restores members atomically',async()=>{
   const before=Number((await db.query('SELECT count(*)::int AS n FROM members')).rows[0].n),created=await call('/admin/backup/run','POST');assert.equal(created.status,201,JSON.stringify(created.data));
-  const bytes=await readFile(created.data.job.filePath);const book=new ExcelJS.Workbook();await book.xlsx.load(bytes);for(const name of ['备份信息','门店设置','会员档案','当前会员卡','会员卡历史'])assert.ok(book.getWorksheet(name));assert.equal(book.getWorksheet('操作记录'),undefined);assert.equal(book.getWorksheet('备份信息')!.getCell('B2').value,'3');
+  const bytes=await readFile(created.data.job.filePath);const book=new ExcelJS.Workbook();await book.xlsx.load((await unpack(bytes))!.get('members.xlsx')! as any);for(const name of ['备份信息','门店设置','会员档案','当前会员卡','会员卡历史'])assert.ok(book.getWorksheet(name));assert.equal(book.getWorksheet('操作记录'),undefined);assert.equal(book.getWorksheet('备份信息')!.getCell('B2').value,'3');
   await create('year',370);assert.equal(Number((await db.query('SELECT count(*)::int AS n FROM members')).rows[0].n),before+1);
-  const form=new FormData();form.append('file',new Blob([new Uint8Array(bytes)]),'backup.xlsx');const restored=await call('/admin/backup/restore','POST',form);assert.equal(restored.status,201,JSON.stringify(restored.data));
+  const form=new FormData();form.append('file',new Blob([new Uint8Array(bytes)]),'backup.zip');const restored=await call('/admin/backup/restore','POST',form);assert.equal(restored.status,201,JSON.stringify(restored.data));
   assert.equal(Number((await db.query('SELECT count(*)::int AS n FROM members')).rows[0].n),before);
   const invalid=new FormData();invalid.append('file',new Blob(['broken']),'backup.xlsx');assert.equal((await call('/admin/backup/restore','POST',invalid)).status,400);assert.equal(Number((await db.query('SELECT count(*)::int AS n FROM members')).rows[0].n),before);
 });
@@ -141,7 +144,7 @@ test('Pause requires a note; concurrent requests only count once and resume exte
   const r=await call('/admin/members','POST',{name:'暂停测试',phone:phone(),kind:'month',startDate:addDays(today,-60),endDate:today,cardRemark:'测试历史期限',note:''});assert.equal(r.status,201);
   const id=r.data.id,path=`/admin/members/${id}/card`,before=(await call(`/admin/members/${id}`)).data;
   assert.equal((await call(path+'/pause','POST',{remark:'   ',version:before.card.version})).status,400);
-  const requests=await Promise.all([1,2].map(()=>call(path+'/pause','POST',{remark:'  出差暂停  ',version:before.card.version})));
+  const requests=await Promise.all([1,2].map(()=>call(path+'/pause','POST',{remark:'  出差暂停  ',date:addDays(today,-30),version:before.card.version})));
   assert.deepEqual(requests.map(r=>r.status).sort(),[201,409]);
   let card=(await call(`/admin/members/${id}`)).data.card;assert.equal(card.pause_count,1);assert.equal(card.status,'paused');
   assert.equal((await call(`/admin/members/${id}`)).data.cardHistory[0].remark,'出差暂停');
@@ -149,7 +152,7 @@ test('Pause requires a note; concurrent requests only count once and resume exte
   assert.equal((await call('/admin/members?expiring=true')).data.items.some((m:any)=>m.id===id),false);
   assert.equal((await call(path+'/renew','POST',{kind:'month',startDate:card.start_date,endDate:addDays(card.end_date,35),remark:'',version:card.version})).status,409);
   assert.equal((await call(path,'PATCH',{kind:'month',startDate:card.start_date,endDate:card.end_date,remark:'',version:card.version})).status,409);
-  await db.query('UPDATE memberships SET paused_on=$2 WHERE member_id=$1',[id,addDays(today,-30)]);
+
   const resumed=await Promise.all([1,2].map(()=>call(path+'/resume','POST',{version:card.version,asOf:today})));
   assert.deepEqual(resumed.map(r=>r.status).sort(),[201,409]);
   card=(await call(`/admin/members/${id}`)).data.card;assert.equal(card.id,before.card.id);assert.equal(card.start_date,before.card.start_date);assert.equal(card.end_date,addDays(before.card.end_date,30));assert.equal(card.total_paused_days,30);
@@ -174,7 +177,7 @@ test('Only active cards can pause; return records server-calculated refund and g
   await call(path+'/renew','POST',{kind:'month',startDate:today,endDate:addDays(today,35),remark:'',version:detail.card.version});detail=(await call(`/admin/members/${id}`)).data;assert.equal(detail.card.status,'active');assert.equal(detail.card.returned_at,null);assert.equal(detail.cardHistory.some((e:any)=>e.event_type==='returned'),true);
   for(const offset of [-80,1]){
     const m=await call('/admin/members','POST',{name:'不可暂停',phone:phone(),kind:'month',startDate:addDays(today,offset),endDate:addDays(today,offset+35),cardRemark:'',note:''});assert.equal(m.status,201);
-    assert.equal((await call(`/admin/members/${m.data.id}/card/pause`,'POST',{remark:'测试',version:1})).status,409);
+    assert.equal((await call(`/admin/members/${m.data.id}/card/pause`,'POST',{remark:'测试',version:1})).status,400);
   }
 });
 
@@ -184,7 +187,7 @@ test('v3 backup restores pending pauses, counts, return snapshots and original m
   const second=await create('year',370),quote=(await call(`/admin/members/${second.id}/card/return-estimate`)).data;
   await call(`/admin/members/${second.id}/card/return`,'POST',{version:quote.version,asOf:quote.asOf,reason:'测试退卡'});
   const expected=(await call(`/admin/members/${first.id}`)).data,returned=(await call(`/admin/members/${second.id}`)).data;
-  const backups=app.get(BackupsService),workbook=await backups.workbook(),buffer=Buffer.from(await workbook.xlsx.writeBuffer());
+  const backups=app.get(BackupsService),buffer=await backups.exportPackage();
   const bad=await backups.workbook();bad.getWorksheet('当前会员卡')!.getCell('M2').value='-1';
   await assert.rejects(backups.restore(Buffer.from(await bad.xlsx.writeBuffer())),/暂停次数/);
   assert.deepEqual((await call(`/admin/members/${first.id}`)).data,expected);
@@ -193,4 +196,82 @@ test('v3 backup restores pending pauses, counts, return snapshots and original m
   assert.deepEqual((await call(`/admin/members/${first.id}`)).data,expected);assert.deepEqual((await call(`/admin/members/${second.id}`)).data,returned);
   assert.equal((await call(path+'/resume','POST',{version:expected.card.version,asOf:todayShanghai()})).status,201);
   const jobs=await Promise.all([backups.createLocal('manual'),backups.createLocal('manual')]);assert.notEqual(jobs[0].job.filePath,jobs[1].job.filePath);
+});
+
+
+test('Editable effective dates deduct completed and open pause periods from refunds',async()=>{
+  const today=todayShanghai(),start=addDays(today,-75);
+  const made=await call('/admin/members','POST',{name:'实际45天',phone:phone(),kind:'year',startDate:start,endDate:addDays(start,370),cardRemark:'',note:''});assert.equal(made.status,201);
+  const id=made.data.id,path='/admin/members/'+id+'/card';
+  let c=(await call('/admin/members/'+id)).data.card;
+  const paused=await call(path+'/pause','POST',{date:addDays(start,30),version:c.version,remark:'出差'});assert.equal(paused.status,201,JSON.stringify(paused.data));
+  c=paused.data;const resumed=await call(path+'/resume','POST',{date:addDays(start,60),version:c.version});assert.equal(resumed.status,201);assert.equal(resumed.data.end_date,addDays(start,400));
+  let quote=(await call(path+'/return-estimate')).data;assert.equal(quote.elapsedDays,75);assert.equal(quote.pausedDays,30);assert.equal(quote.usedDays,45);assert.equal(quote.estimatedRefund,438);
+  assert.equal((await call(path+'/pause','POST',{date:addDays(start,50),version:resumed.data.version,remark:'重复区间'})).status,409);
+  const second=await call(path+'/pause','POST',{date:addDays(today,-5),version:resumed.data.version,remark:'第二次'});assert.equal(second.status,201);
+  quote=(await call(path+'/return-estimate')).data;assert.equal(quote.pausedDays,35);assert.equal(quote.usedDays,40);
+  assert.equal((await call(path+'/return','POST',{version:quote.version,asOf:today,reason:'退卡'})).status,201);
+  c=(await call('/admin/members/'+id)).data.card;
+  const renewed=await call(path+'/renew','POST',{version:c.version,kind:'year',startDate:today,endDate:addDays(today,370),remark:''});assert.equal(renewed.status,201);
+  quote=(await call(path+'/return-estimate')).data;assert.equal(quote.pausedDays,0);assert.equal(quote.usedDays,0);
+});
+
+test('Future pause and resume can be edited, cancelled and executed once after downtime',async()=>{
+  const today=todayShanghai(),member=await create('year',370),path='/admin/members/'+member.id;
+  const pause=await call(path+'/card/pause','POST',{date:addDays(today,1),remark:'未来出差',version:1});assert.equal(pause.data.scheduled,true);
+  const resume=await call(path+'/card/resume','POST',{date:addDays(today,31),version:1});assert.equal(resume.data.scheduled,true);
+  assert.equal((await call(path+'/card/return-estimate')).status,409);
+  assert.equal((await call(path+'/appointments/'+pause.data.id,'POST',{date:addDays(today,2),remark:'改到后天'})).status,201);
+  assert.equal((await call(path+'/appointments/'+pause.data.id,'POST',{cancel:true})).status,201);
+  assert.equal((await call(path)).data.appointments.length,0);assert.equal((await call(path)).data.card.pause_count,0);
+  const p=await call(path+'/card/pause','POST',{date:addDays(today,1),remark:'测试补执行',version:1});
+  const r=await call(path+'/card/resume','POST',{date:addDays(today,2),version:1});
+  // Simulate a machine starting after both effective dates without changing its clock.
+  await db.query('UPDATE memberships SET start_date=$2 WHERE member_id=$1',[member.id,addDays(today,-60)]);
+  await db.query('UPDATE card_appointments SET effective_date=$2 WHERE id=$1',[p.data.id,addDays(today,-30)]);
+  await db.query('UPDATE card_appointments SET effective_date=$2 WHERE id=$1',[r.data.id,today]);
+  await app.get(RemindersService).check();await app.get(RemindersService).check();
+  const detail=(await call(path)).data;assert.equal(detail.card.pause_count,1);assert.equal(detail.card.total_paused_days,30);assert.equal(detail.card.end_date,addDays(today,400));
+  assert.equal((await db.query("SELECT count(*)::int AS n FROM notifications WHERE member_id=$1 AND kind IN ('pause','resume')",[member.id])).rows[0].n,2);
+  const reminders=(await call('/admin/notifications')).data;const reminder=reminders.items.find((n:any)=>n.member_id===member.id&&n.kind==='resume');assert.ok(reminder);
+  await call('/admin/notifications/read','POST',{id:reminder.id});assert.ok((await call('/admin/notifications')).data.items.find((n:any)=>n.id===reminder.id).read_at);
+});
+
+test('Avatars and scheduled state round-trip in ZIP; tampered files do not change current data',async()=>{
+  const member=await create('month',35),path='/admin/members/'+member.id;
+  const bytes=await sharp({create:{width:640,height:480,channels:3,background:'#015556'}}).png().toBuffer();
+  const imageForm=new FormData();imageForm.append('file',new Blob([new Uint8Array(bytes)],{type:'image/png'}),'photo.png');
+  assert.equal((await call(path+'/avatar','POST',imageForm)).status,201);
+  const photo=await call(path+'/avatar');assert.equal(photo.status,200);const metadata=await sharp(photo.data).metadata();assert.equal(metadata.width,256);assert.equal(metadata.height,256);
+  assert.equal((await call(path+'/avatar','GET',undefined,true)).status,401);
+  const invalid=new FormData();invalid.append('file',new Blob(['broken']),'photo.png');assert.equal((await call(path+'/avatar','POST',invalid)).status,400);assert.deepEqual((await call(path+'/avatar')).data,photo.data);
+  const booking=await call(path+'/card/pause','POST',{version:1,date:addDays(todayShanghai(),1),remark:'带照片备份'});assert.equal(booking.status,201);
+  await app.get(RemindersService).check();const backups=app.get(BackupsService),zip=await backups.exportPackage();const files=(await unpack(zip))!;assert.ok(files.has('avatars/'+member.id+'.jpg'));
+  const {pack}=await import('../src/archive.js');const invalidState=JSON.parse(files.get('state.json')!.toString());invalidState.pause_intervals.push({id:'invalid'});files.set('state.json',Buffer.from(JSON.stringify(invalidState)));
+  const before=(await call(path)).data;await assert.rejects(backups.restore(await pack(files)));assert.deepEqual((await call(path)).data,before);
+  await call(path+'/avatar/remove','POST');await call(path+'/appointments/'+booking.data.id,'POST',{cancel:true});
+  await backups.restore(zip);const after=(await call(path)).data;assert.ok(after.avatar_key);assert.equal(after.appointments[0].id,booking.data.id);assert.equal((await call(path+'/avatar')).status,200);
+});
+
+
+test('Date reminders respect expiry boundaries, pause suppression, read state and changed dates',async()=>{
+  const today=todayShanghai(),service=app.get(RemindersService);
+  const fixtures=[];
+  for(const [kind,end]of [['year',30],['year',31],['month',7],['month',8],['month',0],['month',-1]] as const){
+    const r=await call('/admin/members','POST',{name:'提醒边界',phone:phone(),kind,startDate:addDays(today,-10),endDate:addDays(today,end),cardRemark:'提醒测试期限',note:''});assert.equal(r.status,201);fixtures.push(r.data.id);
+  }
+  await service.check();let items=(await service.list()).items;
+  for(const [index,wanted]of [true,false,true,false,true,false].entries())assert.equal(items.some((n:any)=>n.member_id===fixtures[index]&&n.kind==='expiring'&&!n.obsolete),wanted);
+  assert.ok(items.some((n:any)=>n.member_id===fixtures[5]&&n.kind==='expired'));
+  const notice=items.find((n:any)=>n.member_id===fixtures[0]&&n.kind==='expiring');await service.read(notice.id);await service.check();assert.ok((await service.list()).items.find((n:any)=>n.id===notice.id).read_at);
+  await call('/admin/members/'+fixtures[0]+'/card/pause','POST',{version:1,remark:'提醒暂停'});await service.check();assert.ok((await service.list()).items.find((n:any)=>n.id===notice.id).obsolete);
+  const future=await call('/admin/members','POST',{name:'待生效提醒',phone:phone(),kind:'month',startDate:addDays(today,1),endDate:addDays(today,36),cardRemark:'',note:''});assert.equal(future.status,201);
+  await service.check();assert.equal((await service.list()).items.some((n:any)=>n.member_id===future.data.id),false);
+  await db.query('UPDATE memberships SET start_date=$2 WHERE member_id=$1',[future.data.id,today]);await service.check();assert.ok((await service.list()).items.some((n:any)=>n.member_id===future.data.id&&n.kind==='started'));
+});
+
+test('Backdated resume may leave a card expired; same-day periods add zero days',async()=>{
+  const today=todayShanghai(),r=await call('/admin/members','POST',{name:'历史恢复',phone:phone(),kind:'month',startDate:addDays(today,-200),endDate:addDays(today,-100),cardRemark:'旧卡测试',note:''});assert.equal(r.status,201);
+  const path='/admin/members/'+r.data.id+'/card',p=await call(path+'/pause','POST',{version:1,date:addDays(today,-170),remark:'补录暂停'});assert.equal(p.status,201);
+  const resumed=await call(path+'/resume','POST',{version:p.data.version,date:addDays(today,-140)});assert.equal(resumed.status,201);assert.equal(resumed.data.status,'expired');assert.equal(resumed.data.end_date,addDays(today,-70));
 });
