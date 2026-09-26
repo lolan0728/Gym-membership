@@ -67,7 +67,7 @@
 .avatar-preview-button:focus-visible{outline:3px solid #8eaea0;outline-offset:3px}
 .detail-heading>.avatar-preview-button,.detail-heading>.avatar-placeholder{width:84px;height:84px;border-radius:17px}
 .detail-heading .member-avatar{width:84px;height:84px;border-radius:17px}
-.member-avatar.small,.avatar-placeholder.small{width:44px;height:44px;border-radius:10px;font-size:12px}
+.member-avatar.small,.avatar-placeholder.small{width:44px;height:44px;border-radius:10px;font-size:9px;letter-spacing:0}
 .list-avatar-button{border-radius:10px}
 .members-main .members-table td.el-table__cell{height:62px}
 .avatar-editor{display:grid;grid-template-columns:112px 1fr auto;align-items:center;gap:16px;margin:18px 0 24px;padding:16px;border:1px dashed #b8ccc2;border-radius:13px;background:#f8fbf9;transition:border-color .2s,background .2s,box-shadow .2s}

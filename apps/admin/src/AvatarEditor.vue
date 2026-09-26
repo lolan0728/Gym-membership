@@ -95,7 +95,7 @@ onUnmounted(()=>{
   >
     <button class="avatar-editor-image" type="button" aria-label="选择会员头像" @click="input?.click()">
       <img v-if="preview||props.src" :src="preview||props.src" alt="会员头像"/>
-      <span v-else class="avatar-placeholder">{{name.slice(-2)||'头像'}}</span>
+      <span v-else class="avatar-placeholder">无头像</span>
     </button>
     <div class="avatar-editor-copy">
       <b>{{dragActive?'松开即可添加照片':'会员头像（选填）'}}</b>

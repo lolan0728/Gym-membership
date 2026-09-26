@@ -44,6 +44,7 @@ try{
   assert.equal(await page.locator('.sidebar .nav-count').count(),0,'Sidebar must not show a member-count badge');
   assert.equal(await page.getByPlaceholder('全部卡种').count(),0,'Member search must not include a card-kind filter');
   await page.locator('.members-table .member-identity').first().waitFor();
+  assert.equal(await page.locator('.members-table .avatar-placeholder.small').first().innerText(),'无头像');
   await page.getByText(/每页 12 位/).waitFor();
   const compactRowHeight=await page.locator('.members-table tbody tr').first().evaluate(element=>Math.round(element.getBoundingClientRect().height));assert.ok(compactRowHeight<=68,`Member rows should remain compact, got ${compactRowHeight}px`);
   const allMembersText=await page.locator('.table-footer>span').innerText();
