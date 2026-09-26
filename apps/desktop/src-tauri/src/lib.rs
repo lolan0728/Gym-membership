@@ -466,6 +466,8 @@ pub fn run() {
                 .title("悦体健身 · JOYFIT 会员管理")
                 .inner_size(1400.0, 900.0)
                 .min_inner_size(1024.0, 680.0)
+                // Windows WebView must receive native files as HTML5 drop events.
+                .disable_drag_drop_handler()
                 .center()
                 .build()?;
             let startup = state.clone();
