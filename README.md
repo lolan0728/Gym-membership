@@ -11,7 +11,7 @@ npm run build:portable
 
 首次构建还需要 Rust stable 和 Visual Studio 2022 Build Tools（Desktop development with C++）。生成的便携版 ZIP 在 `output/windows`；完整解压后双击主程序即可使用。
 
-安装后首次启动需设置管理员密码、门店信息、月卡/年卡天数和备份邮箱。月卡默认30天，年卡默认365天，修改只影响后续新办和续卡。会员头像、微信绑定和小程序功能不在单机版中启用。
+安装后首次启动需设置管理员密码、门店信息、月卡/年卡天数和备份邮箱。月卡默认30天，年卡默认365天，修改只影响后续新办和续卡。单机版支持本地会员头像及完整ZIP备份；微信绑定和小程序功能不启用。
 
 详细操作见 [Windows单机版使用与备份说明](docs/desktop-guide.md)。
 
