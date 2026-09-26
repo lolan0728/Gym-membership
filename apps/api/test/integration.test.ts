@@ -90,7 +90,7 @@ test('Excel template and validation use the current configured duration',async()
 
 test('Full Excel backup saves locally and restores members atomically',async()=>{
   const before=Number((await db.query('SELECT count(*)::int AS n FROM members')).rows[0].n),created=await call('/admin/backup/run','POST');assert.equal(created.status,201,JSON.stringify(created.data));
-  const bytes=await readFile(created.data.job.filePath);const book=new ExcelJS.Workbook();await book.xlsx.load((await unpack(bytes))!.get('members.xlsx')! as any);for(const name of ['备份信息','门店设置','会员档案','当前会员卡','会员卡历史'])assert.ok(book.getWorksheet(name));assert.equal(book.getWorksheet('操作记录'),undefined);assert.equal(book.getWorksheet('备份信息')!.getCell('B2').value,'3');
+  const bytes=await readFile(created.data.job.filePath);const book=new ExcelJS.Workbook();await book.xlsx.load((await unpack(bytes))!.get('members.xlsx')! as any);for(const name of ['备份信息','门店设置','会员档案','当前会员卡','会员卡历史'])assert.ok(book.getWorksheet(name));assert.equal(book.getWorksheet('操作记录'),undefined);assert.equal(book.getWorksheet('备份信息')!.getCell('B2').value,'4');
   await create('year',370);assert.equal(Number((await db.query('SELECT count(*)::int AS n FROM members')).rows[0].n),before+1);
   const form=new FormData();form.append('file',new Blob([new Uint8Array(bytes)]),'backup.zip');const restored=await call('/admin/backup/restore','POST',form);assert.equal(restored.status,201,JSON.stringify(restored.data));
   assert.equal(Number((await db.query('SELECT count(*)::int AS n FROM members')).rows[0].n),before);
@@ -181,6 +181,17 @@ test('Only active cards can pause; return records server-calculated refund and g
   }
 });
 
+test('Return estimate keeps opening and renewal purchases as FIFO refund segments',async()=>{
+  const today=todayShanghai(),start=addDays(today,-30),annualEnd=addDays(start,395);
+  const made=await call('/admin/members','POST',{name:'分段退款',phone:phone(),kind:'year',startDate:start,endDate:annualEnd,cardRemark:'年卡赠送30天',note:''});assert.equal(made.status,201);
+  const path=`/admin/members/${made.data.id}/card`,card=(await call(`/admin/members/${made.data.id}`)).data.card;
+  const renewed=await call(path+'/renew','POST',{kind:'month',startDate:start,endDate:addDays(annualEnd,30),remark:'按30天续月卡',version:card.version});assert.equal(renewed.status,201,JSON.stringify(renewed.data));
+  const quote=(await call(path+'/return-estimate')).data;
+  assert.equal(quote.segments.length,2);assert.deepEqual(quote.segments.map((s:any)=>s.kind),['year','month']);
+  assert.equal(quote.segments[0].giftDays,30);assert.equal(quote.segments[0].usedPaidDays,30);assert.equal(quote.segments[1].usedPaidDays,0);assert.equal(quote.segments[1].rawRefund,99);
+  assert.equal(quote.estimatedRefund,Math.ceil((365-30)*499/365+99));
+});
+
 test('v3 backup restores pending pauses, counts, return snapshots and original member numbers',async()=>{
   const first=await create('month',35),path=`/admin/members/${first.id}/card`;
   await call(path+'/pause','POST',{version:1,remark:'等待恢复'});
@@ -213,7 +224,7 @@ test('Editable effective dates deduct completed and open pause periods from refu
   assert.equal((await call(path+'/return','POST',{version:quote.version,asOf:today,reason:'退卡'})).status,201);
   c=(await call('/admin/members/'+id)).data.card;
   const renewed=await call(path+'/renew','POST',{version:c.version,kind:'year',startDate:today,endDate:addDays(today,370),remark:''});assert.equal(renewed.status,201);
-  quote=(await call(path+'/return-estimate')).data;assert.equal(quote.pausedDays,0);assert.equal(quote.usedDays,0);
+  quote=(await call(path+'/return-estimate')).data;assert.equal(quote.pausedDays,0);assert.equal(quote.usedDays,0);assert.equal(quote.segments.length,1);assert.equal(quote.segments[0].grantedDays,370);
 });
 
 test('Future pause and resume can be edited, cancelled and executed once after downtime',async()=>{

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import {ref,reactive,computed,onMounted,onUnmounted,watch} from 'vue';
+import {ref,reactive,computed,onMounted,onUnmounted,watch,nextTick} from 'vue';
 import {ElMessage,ElMessageBox} from 'element-plus';
 import {User,Search,Plus,Upload,Setting,ArrowRight,ArrowDown,Download,SwitchButton,Calendar,Connection,Check,Refresh,Document,Lock,Promotion,EditPen,DataAnalysis} from '@element-plus/icons-vue';
 import AvatarEditor from './AvatarEditor.vue';
@@ -56,6 +56,7 @@ const cardRemarkRequired=computed(()=>{
   return !!base&&cardForm.endDate!==addDays(base,durationDays(cardForm.kind));
 });
 const historyTitle=(event:Member['cardHistory'][number])=>event.event_type==='renewed'?`续${kindLabel(event.selected_kind||event.kind)}`:(historyLabels[event.event_type]||'会员卡记录');
+const refundSegmentTitle=(index:number,kind:string)=>`${index===0?'本周期首次办理':`第 ${index} 次续卡`} · ${kindLabel(kind)}`;
 const remarkLong=(value:string)=>value.length>80||value.split(/\r?\n/).length>2;
 const remarkExpanded=(id:string)=>expandedRemarks.value.has(id);
 function toggleRemark(id:string){const next=new Set(expandedRemarks.value);next.has(id)?next.delete(id):next.add(id);expandedRemarks.value=next;}
@@ -102,7 +103,7 @@ async function openLifecycle(action:'pause'|'resume'|'return'){
   const member=await api<Member>(`/admin/members/${selected.value.id}`);selected.value=member;if(!member.card)return;
   appointmentEditing.value=null;lifecycleCard.value={...member.card};lifecycleMemberId.value=member.id;lifecycleRemark.value='';lifecycleDay.value=day();refundEstimate.value=null;
   if(action==='return'){refundEstimate.value=await api<ReturnEstimate>(`/admin/members/${member.id}/card/return-estimate`);if(refundEstimate.value.version!==member.card.version)throw new Error('会员卡已更新，请重新打开退卡窗口');}
-  lifecycleAction.value=action;lifecycleDialog.value=true;
+  lifecycleAction.value=action;lifecycleDialog.value=true;await nextTick();document.querySelector('.lifecycle-dialog .el-dialog__body')?.scrollTo({top:0});
 }
 async function saveLifecycle(){
   const card=lifecycleCard.value;if(!card)return;
@@ -175,7 +176,7 @@ onUnmounted(()=>{window.removeEventListener('auth-expired',expired);clearTimeout
   <el-dialog v-model="cardDialog" :title="cardEditing?'修改会员卡':'办理续卡'" width="480px" :close-on-click-modal="false"><p class="dialog-intro">{{cardEditing?'修改卡种或日期后会保留会员卡历史。':renewalUnexpired?'续卡将从当前到期日继续延长，不会产生空档。':'会员卡已到期、退卡或历史作废，默认从今天重新开始。'}}</p><el-form label-position="top"><el-form-item :label="cardEditing?'卡种':'续卡类型'"><el-radio-group v-model="cardForm.kind"><el-radio-button value="year">年卡</el-radio-button><el-radio-button value="month">月卡</el-radio-button></el-radio-group></el-form-item><el-alert v-if="!cardEditing&&effectiveRenewalKind!==cardForm.kind" type="info" :closable="false" :title="`当前为年卡，本次续月卡将延长 ${store.monthCardDays} 天，卡种仍显示年卡。`"/><el-form-item label="开始日期"><el-date-picker v-model="cardForm.startDate" class="card-date-control" type="date" value-format="YYYY-MM-DD" :disabled="!cardEditing&&renewalUnexpired"/></el-form-item><el-form-item v-if="!cardEditing&&renewalUnexpired" label="原到期日期"><el-input :model-value="formatDate(renewalOriginalEnd)" class="card-date-control" disabled/></el-form-item><el-form-item :label="!cardEditing&&renewalUnexpired?'新到期日期':'到期日期'"><el-date-picker v-model="cardForm.endDate" class="card-date-control" type="date" value-format="YYYY-MM-DD"/></el-form-item><el-form-item :label="cardRemarkRequired?'备注 *':'备注（选填）'"><el-input v-model="cardForm.remark" type="textarea" :rows="3" maxlength="500" show-word-limit :placeholder="cardRemarkRequired?'日期偏离系统默认期限，请说明原因':'记录本次办理的补充信息'"/></el-form-item></el-form><template #footer><el-button @click="cardDialog=false">取消</el-button><el-button type="primary" :loading="saving" @click="run(saveCard)">{{cardEditing?'保存修改':'确认续卡'}}</el-button></template></el-dialog>
   <el-drawer v-model="reminderOpen" title="日期提醒" size="480px"><div class="reminder-tools"><el-switch v-model="showRead" active-text="包含已读和失效"/><el-button text @click="run(()=>readReminder())">全部已读</el-button></div><p v-if="!visibleReminders.length" class="muted">暂无待处理提醒</p><button v-for="item in visibleReminders" :key="item.id" class="reminder-item" :class="{obsolete:item.obsolete}" @click="run(()=>readReminder(item))"><b>{{item.title}} <small v-if="item.obsolete">已失效</small></b><span>{{item.name}} · {{item.card_number}}</span><small>{{formatDate(item.effective_date)}} · {{item.read_at?'已读':'未读'}}</small></button></el-drawer>
   <el-dialog v-model="avatarPreviewOpen" :title="`${avatarPreviewName}的会员头像`" width="min(620px, 90vw)" append-to-body class="avatar-preview-dialog"><img :src="avatarPreviewUrl" :alt="`${avatarPreviewName}的会员头像大图`" class="avatar-preview-large"/></el-dialog>
-  <el-dialog v-model="lifecycleDialog" :title="lifecycleAction==='pause'?'暂停会员卡':lifecycleAction==='resume'?'恢复会员卡':'办理退卡'" width="540px" :close-on-click-modal="false" :close-on-press-escape="!lifecycleBusy" :show-close="!lifecycleBusy" class="lifecycle-dialog">
+  <el-dialog v-model="lifecycleDialog" :title="lifecycleAction==='pause'?'暂停会员卡':lifecycleAction==='resume'?'恢复会员卡':'办理退卡'" :width="lifecycleAction==='return'?'660px':'540px'" :close-on-click-modal="false" :close-on-press-escape="!lifecycleBusy" :show-close="!lifecycleBusy" class="lifecycle-dialog">
     <template v-if="lifecycleCard">
       <p class="dialog-intro">{{selected?.name}} · {{selected?.card_number}}</p>
       <template v-if="lifecycleAction==='pause'">
@@ -188,9 +189,10 @@ onUnmounted(()=>{window.removeEventListener('auth-expired',expired);clearTimeout
         <p class="lifecycle-note">选择未来日期将预约恢复，其他日期立即办理。原到期日顺延 {{resumeDays}} 天；历史记录自动保留。</p>
       </template>
       <template v-else-if="refundEstimate">
-        <dl class="lifecycle-facts"><dt>开卡日期</dt><dd>{{formatDate(refundEstimate.startDate)}}</dd><dt>退卡日期</dt><dd>{{formatDate(refundEstimate.asOf)}}</dd><dt>经过天数</dt><dd>{{refundEstimate.elapsedDays}} 天</dd><dt>暂停天数</dt><dd>{{refundEstimate.pausedDays}} 天</dd><dt>实际使用天数</dt><dd>{{refundEstimate.usedDays}} 天</dd><dt>已使用百分比</dt><dd>{{refundEstimate.usedPercent.toFixed(2)}}%</dd><dt>估算基准</dt><dd>{{kindLabel(lifecycleCard.kind)}} · {{refundEstimate.basisDays}} 天 · ¥{{refundEstimate.price}}</dd></dl>
+        <dl class="lifecycle-facts refund-summary"><dt>本周期开始日期</dt><dd>{{formatDate(refundEstimate.startDate)}}</dd><dt>退卡日期</dt><dd>{{formatDate(refundEstimate.asOf)}}</dd><dt>经过天数</dt><dd>{{refundEstimate.elapsedDays}} 天</dd><dt>暂停天数</dt><dd>{{refundEstimate.pausedDays}} 天</dd><dt>实际使用天数</dt><dd>{{refundEstimate.usedDays}} 天</dd><dt>付费天数使用比例</dt><dd>{{refundEstimate.usedPercent.toFixed(2)}}%</dd><dt>本周期办理</dt><dd>{{refundEstimate.segments.length}} 段 · 卡价合计 ¥{{refundEstimate.totalPrice}}<span v-if="refundEstimate.giftDays"> · 赠送 {{refundEstimate.giftDays}} 天</span></dd></dl>
+        <section class="refund-segments"><h3>开卡与续卡退款明细</h3><article v-for="(segment,index) in refundEstimate.segments" :key="segment.id"><div><b>{{refundSegmentTitle(index,segment.kind)}}</b><strong>¥{{segment.rawRefund.toFixed(2)}}</strong></div><p>卡价 ¥{{segment.price}} · 退款基准 {{segment.paidDays}} 天<span v-if="segment.giftDays"> · 赠送 {{segment.giftDays}} 天</span></p><p>已使用付费 {{segment.usedPaidDays}} 天<span v-if="segment.giftDays"> · 已使用赠送 {{segment.usedGiftDays}} 天</span> · 剩余付费 {{segment.remainingPaidDays}} 天</p></article></section>
         <div class="refund-amount"><span>估算退款额</span><strong>¥{{refundEstimate.estimatedRefund}}</strong></div>
-        <p class="lifecycle-note">实际使用天数已扣除本次有效期内的暂停天数（含仍在暂停的天数）。退款＝剩余比例 × 卡价，金额向上取整，最低 0 元；百分比显示保留两位小数，金额按未舍入的比例计算。实际退款在线下核实，确认后会员卡停止使用。</p>
+        <p class="lifecycle-note">实际使用天数已扣除本次连续会员周期内的暂停天数。每段先使用付费天数，再使用该段赠送天数，然后进入下一次续卡；赠送天数不产生退款。各段剩余退款相加后统一向上取整，实际退款请在线下核实。</p>
       </template>
       <el-form v-if="lifecycleAction!=='resume'" label-position="top" @submit.prevent><el-form-item :label="lifecycleAction==='pause'?'备注 *':'退卡原因 *'"><el-input v-model="lifecycleRemark" type="textarea" :rows="3" maxlength="500" show-word-limit :placeholder="lifecycleAction==='pause'?'请说明暂停原因':'请说明退卡原因及线下退款约定'"/></el-form-item></el-form>
     </template>

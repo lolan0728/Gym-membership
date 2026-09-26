@@ -2,8 +2,8 @@ import { BadRequestException, ConflictException, ForbiddenException, Inject, Inj
 import { randomUUID } from 'node:crypto';
 import { AuthRequest } from './auth.js';
 import { Db, Queryable } from './db.js';
-import { addDays, daysBetween, dateSchema, returnEstimate, cardRemarkRequired, membershipDays, MembershipDurations, statusOf, todayShanghai } from './domain.js';
-import { beijingMonth } from './time.js';
+import { addDays, daysBetween, dateSchema, segmentedReturnEstimate, refundBasis, RefundSegmentInput, cardRemarkRequired, membershipDays, MembershipDurations, statusOf, todayShanghai } from './domain.js';
+import { beijingDay, beijingMonth } from './time.js';
 
 export async function audit(q:Queryable,action:string,memberId:string|null,detail:unknown,actor='owner') {
   await q.query('INSERT INTO audit_logs(id,member_id,action,actor,detail) VALUES($1,$2,$3,$4,$5)',[randomUUID(),memberId,action,actor,JSON.stringify(detail)]);
@@ -30,12 +30,16 @@ export function displayCard(card:any) {
   return {...normalized,status:statusOf(normalized)};
 }
 
-export async function cardEvent(q:Queryable,memberId:string,eventType:string,card:any,selectedKind?:string,remark='',detail:unknown={},durationDays:number|null=null) {
+type BillingSnapshot={kind:'year'|'month';grantedDays:number};
+export async function cardEvent(q:Queryable,memberId:string,eventType:string,card:any,selectedKind?:string,remark='',detail:unknown={},durationDays:number|null=null,billing?:BillingSnapshot) {
+  const basis=billing?refundBasis(billing.kind):null,giftDays=billing?Math.max(0,billing.grantedDays-basis!.basisDays):null;
   await q.query(`INSERT INTO membership_events(
-    id,member_id,membership_id,event_type,selected_kind,kind,start_date,end_date,voided_at,void_reason,remark,detail,duration_days
-  ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,[
+    id,member_id,membership_id,event_type,selected_kind,kind,start_date,end_date,voided_at,void_reason,remark,detail,duration_days,
+    cycle_id,refund_basis_days,refund_price,granted_days,gift_days
+  ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,[
     randomUUID(),memberId,card.id,eventType,selectedKind||null,card.kind,date(card.start_date),date(card.end_date),
-    card.voided_at||null,card.void_reason||null,remark,JSON.stringify(detail),durationDays
+    card.voided_at||null,card.void_reason||null,remark,JSON.stringify(detail),durationDays,card.cycle_id||null,
+    basis?.basisDays??null,basis?.price??null,billing?.grantedDays??null,giftDays
   ]);
 }
 
@@ -47,7 +51,7 @@ export async function insertMember(q:Queryable,input:any) {
   const id=randomUUID(),cardNumber=await nextMemberNumber(q),cardId=randomUUID();
   const {rows}=await q.query('INSERT INTO members(id,name,phone,card_number,note) VALUES($1,$2,$3,$4,$5) RETURNING *',[id,input.name,input.phone,cardNumber,input.note||'']);
   const card=(await q.query('INSERT INTO memberships(id,member_id,kind,start_date,end_date) VALUES($1,$2,$3,$4,$5) RETURNING *',[cardId,id,input.kind,input.startDate,input.endDate])).rows[0];
-  await cardEvent(q,id,'opened',card,input.kind,input.cardRemark,{},durationDays);
+  await cardEvent(q,id,'opened',card,input.kind,input.cardRemark,{},durationDays,{kind:input.kind,grantedDays:Math.max(0,daysBetween(input.startDate,input.endDate))});
   await audit(q,'member_created',id,{name:input.name,phone:input.phone,note:input.note||'',kind:input.kind,startDate:input.startDate,endDate:input.endDate,cardRemark:input.cardRemark,cardNumber,durationDays});
   return rows[0];
 }
@@ -129,7 +133,7 @@ export class MembersService {
       const after=(await q.query(`UPDATE memberships SET kind=$2,start_date=$3,end_date=$4,voided_at=NULL,void_reason=NULL,returned_at=NULL,
         cycle_id=CASE WHEN $5 THEN cycle_id ELSE gen_random_uuid() END,pause_review_required=CASE WHEN $5 THEN pause_review_required ELSE false END,
         version=version+1,updated_at=now() WHERE id=$1 RETURNING *`,[before.id,kind,input.startDate,input.endDate,unexpired])).rows[0];
-      await cardEvent(q,memberId,'renewed',after,input.kind,input.remark,{before:current},durationDays);
+      await cardEvent(q,memberId,'renewed',after,input.kind,input.remark,{before:current},durationDays,{kind:input.kind,grantedDays:Math.max(0,daysBetween(renewalBase,input.endDate))});
       await audit(q,'card_renewed',memberId,{selectedKind:input.kind,durationDays,remark:input.remark,before:current,after:displayCard(after)});
       return displayCard(after);
     });
@@ -250,7 +254,36 @@ export class MembersService {
     const intervals=(await q.query('SELECT start_date,end_date FROM pause_intervals WHERE member_id=$1 AND cycle_id=$2 ORDER BY start_date',[card.member_id,card.cycle_id])).rows;
     let days=0,last=date(card.start_date);
     for(const p of intervals){const start=[date(p.start_date),date(card.start_date),last].sort().at(-1)!,end=p.end_date&&date(p.end_date)<asOf?date(p.end_date):asOf;if(end>start){days+=daysBetween(start,end);last=end;}}
-    return returnEstimate(displayCard(card),asOf,days);
+    const events=(await q.query(`SELECT id,event_type,selected_kind,kind,start_date,end_date,detail,created_at,
+      refund_basis_days,refund_price,granted_days,gift_days FROM membership_events WHERE member_id=$1 ORDER BY created_at,id`,[card.member_id])).rows;
+    let segments:RefundSegmentInput[]=[];
+    for(const event of events){
+      const detail=typeof event.detail==='string'?JSON.parse(event.detail||'{}'):event.detail||{};
+      if(['opened','migrated','renewed'].includes(event.event_type)){
+        const before=detail.before||{},operationDay=beijingDay(event.created_at);
+        const startsCycle=event.event_type!=='renewed'||!!before.voided_at||(before.end_date&&date(before.end_date)<operationDay);
+        if(startsCycle)segments=[];
+        const kind=(event.selected_kind||event.kind) as 'year'|'month',basis=refundBasis(kind);
+        const inferred=event.event_type==='renewed'&&before.end_date&&!startsCycle
+          ?Math.max(0,daysBetween(date(before.end_date),date(event.end_date)))
+          :Math.max(0,daysBetween(date(event.start_date),date(event.end_date)));
+        const granted=event.granted_days===null||event.granted_days===undefined?inferred:Number(event.granted_days);
+        const paidDays=Number(event.refund_basis_days)||basis.basisDays;
+        segments.push({id:event.id,source:event.event_type as RefundSegmentInput['source'],kind,paidDays,
+          grantedDays:granted,giftDays:Math.max(0,granted-paidDays),price:Number(event.refund_price)||basis.price});
+      }else if(event.event_type==='updated'&&segments.length&&detail.before){
+        const first=segments[0],last=segments.at(-1)!;
+        const startDelta=daysBetween(date(event.start_date),date(detail.before.start_date));
+        const endDelta=daysBetween(date(detail.before.end_date),date(event.end_date));
+        first.grantedDays=Math.max(0,first.grantedDays+startDelta);first.giftDays=Math.max(0,first.grantedDays-first.paidDays);
+        last.grantedDays=Math.max(0,last.grantedDays+endDelta);last.giftDays=Math.max(0,last.grantedDays-last.paidDays);
+      }
+    }
+    if(!segments.length){
+      const kind=card.kind as 'year'|'month',basis=refundBasis(kind),granted=Math.max(0,daysBetween(date(card.start_date),date(card.end_date))-Number(card.total_paused_days||0));
+      segments=[{id:card.id,source:'migrated',kind,paidDays:basis.basisDays,grantedDays:granted,giftDays:Math.max(0,granted-basis.basisDays),price:basis.price}];
+    }
+    return segmentedReturnEstimate(displayCard(card),segments,asOf,days);
   }
 
   private async lockCard(q:Queryable,memberId:string,version:number){

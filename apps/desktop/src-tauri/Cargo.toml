@@ -1,6 +1,6 @@
 [package]
 name = "joyfit-desktop"
-version = "1.4.2"
+version = "1.5.0"
 description = "悦体健身会员管理单机版"
 authors = ["JOYFIT"]
 edition = "2021"

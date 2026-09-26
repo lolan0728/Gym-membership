@@ -13,7 +13,7 @@ import { OperationLogsService } from './operation-logs.js';
 import { dateSchema } from './domain.js';
 import { backupStamp, beijingDay, beijingMonth, normalizeExcelDate, normalizeExcelDateTime } from './time.js';
 
-const FORMAT_VERSION='3';
+const FORMAT_VERSION='4';
 const MIME='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 const asDate=(value:any)=>String(value instanceof Date?value.toISOString():value).slice(0,10).replaceAll('-','/');
 // Excel stores a date serial, while the display format remains Beijing time to seconds.
@@ -59,14 +59,14 @@ export class BackupsService {
     const [members,cards,events,store,state]=await Promise.all([
       q.query('SELECT id,name,phone,card_number,note,version,created_at,updated_at FROM members ORDER BY created_at,id'),
       q.query('SELECT id,member_id,kind,start_date,end_date,voided_at,void_reason,version,created_at,updated_at,paused_on,pause_count,total_paused_days,returned_at FROM memberships ORDER BY created_at,id'),
-      q.query('SELECT id,member_id,membership_id,event_type,selected_kind,kind,start_date,end_date,voided_at,void_reason,remark,duration_days,detail,created_at FROM membership_events ORDER BY created_at,id'),
+      q.query('SELECT id,member_id,membership_id,event_type,selected_kind,kind,start_date,end_date,voided_at,void_reason,remark,duration_days,detail,cycle_id,refund_basis_days,refund_price,granted_days,gift_days,created_at FROM membership_events ORDER BY created_at,id'),
       q.query('SELECT name,phone,month_card_days,year_card_days FROM settings WHERE id=1'),q.query('SELECT data_revision FROM desktop_state WHERE id=1')]);
     const s=store.rows[0];return [
-      {name:'备份信息',headers:['项目','值'],rows:[['格式版本',FORMAT_VERSION],['应用版本','1.4.0'],['导出时间',asTime(new Date())],['数据版本',String(state.rows[0].data_revision)],['会员数量',String(members.rows.length)],['当前会员卡数量',String(cards.rows.length)]]},
+      {name:'备份信息',headers:['项目','值'],rows:[['格式版本',FORMAT_VERSION],['应用版本','1.5.0'],['导出时间',asTime(new Date())],['数据版本',String(state.rows[0].data_revision)],['会员数量',String(members.rows.length)],['当前会员卡数量',String(cards.rows.length)]]},
       {name:'门店设置',headers:['门店名称','联系电话','月卡天数','年卡天数'],rows:[[s.name,s.phone,s.month_card_days,s.year_card_days]]},
       {name:'会员档案',headers:['ID','姓名','手机号','会员号码','档案备注','版本','创建时间','更新时间'],rows:members.rows.map(r=>[r.id,r.name,r.phone,r.card_number,r.note,r.version,asTime(r.created_at),asTime(r.updated_at)])},
       {name:'当前会员卡',headers:['ID','会员ID','卡种','开始日期','到期日期','是否停用','停用时间','停用原因','版本','创建时间','更新时间','暂停开始日期','累计暂停次数','累计已恢复暂停天数','退卡时间'],rows:cards.rows.map(r=>[r.id,r.member_id,r.kind,asDate(r.start_date),asDate(r.end_date),!!r.voided_at,r.voided_at?asTime(r.voided_at):'',r.void_reason||'',r.version,asTime(r.created_at),asTime(r.updated_at),r.paused_on?asDate(r.paused_on):'',r.pause_count,r.total_paused_days,r.returned_at?asTime(r.returned_at):''])},
-      {name:'会员卡历史',headers:['ID','会员ID','会员卡ID','事件类型','本次选择卡种','最终卡种','开始日期','到期日期','是否作废','作废时间','作废原因','备注','采用天数','详情','操作时间'],rows:events.rows.map(r=>[r.id,r.member_id,r.membership_id,r.event_type,r.selected_kind||'',r.kind,asDate(r.start_date),asDate(r.end_date),!!r.voided_at,r.voided_at?asTime(r.voided_at):'',r.void_reason||'',r.remark||'',r.duration_days??'',clean(r.detail),asTime(r.created_at)])}
+      {name:'会员卡历史',headers:['ID','会员ID','会员卡ID','事件类型','本次选择卡种','最终卡种','开始日期','到期日期','是否作废','作废时间','作废原因','备注','采用天数','详情','周期ID','退款基准天数','卡价','实际增加天数','赠送天数','操作时间'],rows:events.rows.map(r=>[r.id,r.member_id,r.membership_id,r.event_type,r.selected_kind||'',r.kind,asDate(r.start_date),asDate(r.end_date),!!r.voided_at,r.voided_at?asTime(r.voided_at):'',r.void_reason||'',r.remark||'',r.duration_days??'',clean(r.detail),r.cycle_id||'',r.refund_basis_days??'',r.refund_price??'',r.granted_days??'',r.gift_days??'',asTime(r.created_at)])}
     ];
   }
 
@@ -152,19 +152,24 @@ export class BackupsService {
     if(buffer.length>25*1024*1024)throw new BadRequestException('备份文件不能超过 25 MB');
     const workbook=new ExcelJS.Workbook();try{await workbook.xlsx.load(buffer as any);}catch{throw new BadRequestException('无法读取备份工作簿');}
     const table=(name:string,headers:string[])=>{const sheet=workbook.getWorksheet(name);if(!sheet)throw new BadRequestException(`缺少工作表：${name}`);const actual=sheet.getRow(1).values as any[];if(headers.some((h,i)=>String(actual[i+1]??'')!==h))throw new BadRequestException(`${name} 的表头不正确`);const rows:any[][]=[];for(let i=2;i<=sheet.rowCount;i++){const values=headers.map((_,j)=>clean(sheet.getRow(i).getCell(j+1).value).trim());if(values.some(Boolean))rows.push(values);}return rows;};
-    const info=table('备份信息',['项目','值']),version=info.find(r=>r[0]==='格式版本')?.[1];if(!['1','2','3'].includes(version))throw new ConflictException('备份格式版本不兼容');
+    const info=table('备份信息',['项目','值']),version=info.find(r=>r[0]==='格式版本')?.[1];if(!['1','2','3','4'].includes(version))throw new ConflictException('备份格式版本不兼容');
+    const modern=version==='3'||version==='4';
     const store=table('门店设置',['门店名称','联系电话','月卡天数','年卡天数'])[0];if(!store)throw new BadRequestException('门店设置为空');
     const members=table('会员档案',['ID','姓名','手机号',version==='1'?'会员卡号':'会员号码','档案备注','版本','创建时间','更新时间']);
-    const cards=table('当前会员卡',['ID','会员ID','卡种','开始日期','到期日期',...(version==='3'?['是否停用','停用时间','停用原因']:['是否作废','作废时间','作废原因']),'版本','创建时间','更新时间',...(version==='3'?['暂停开始日期','累计暂停次数','累计已恢复暂停天数','退卡时间']:[])]);
-    const events=table('会员卡历史',['ID','会员ID','会员卡ID','事件类型','本次选择卡种','最终卡种','开始日期','到期日期','是否作废','作废时间','作废原因','备注','采用天数','详情','操作时间']);
-    this.validateRestore(store,members,cards,events,version);
+    const cards=table('当前会员卡',['ID','会员ID','卡种','开始日期','到期日期',...(modern?['是否停用','停用时间','停用原因']:['是否作废','作废时间','作废原因']),'版本','创建时间','更新时间',...(modern?['暂停开始日期','累计暂停次数','累计已恢复暂停天数','退卡时间']:[])]);
+    const eventHasBilling=String(workbook.getWorksheet('会员卡历史')?.getRow(1).getCell(15).value||'')==='周期ID';
+    const events=table('会员卡历史',['ID','会员ID','会员卡ID','事件类型','本次选择卡种','最终卡种','开始日期','到期日期','是否作废','作废时间','作废原因','备注','采用天数','详情',...(eventHasBilling?['周期ID','退款基准天数','卡价','实际增加天数','赠送天数']:[]),'操作时间']);
+    this.validateRestore(store,members,cards,events,version,eventHasBilling);
     await this.operationLogs.flush();await this.createLocal('pre_restore');
     await this.db.tx(async q=>{
       await q.query('DELETE FROM notifications');await q.query('DELETE FROM card_appointments');await q.query('DELETE FROM pause_intervals');await q.query('DELETE FROM reminder_state');await q.query('DELETE FROM wechat_bindings');await q.query("DELETE FROM sessions WHERE role='wechat'");await q.query('DELETE FROM membership_events');await q.query('DELETE FROM memberships');await q.query('UPDATE audit_logs SET member_id=NULL WHERE member_id IS NOT NULL');await q.query('DELETE FROM members');await q.query('DELETE FROM import_batches');await q.query('DELETE FROM member_number_sequences');
       for(const r of members){const created=normalizeExcelDateTime(r[6]),updated=normalizeExcelDateTime(r[7]);const number=version!=='1'?r[3]:await nextMemberNumber(q,beijingMonth(created));await q.query(`INSERT INTO members(id,name,phone,card_number,note,theme,avatar_key,version,created_at,updated_at) VALUES($1,$2,$3,$4,$5,'gold',NULL,$6,$7,$8)`,[r[0],r[1],r[2],number,r[4],Number(r[5]),created,updated]);}
       if(version!=='1')await q.query(`INSERT INTO member_number_sequences(month_key,last_value) SELECT substring(card_number from 2 for 6),max(substring(card_number from 8 for 4)::integer) FROM members GROUP BY substring(card_number from 2 for 6)`);
-      for(const r of cards)await q.query(`INSERT INTO memberships(id,member_id,kind,start_date,end_date,voided_at,void_reason,version,created_at,updated_at,paused_on,pause_count,total_paused_days,returned_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,[r[0],r[1],r[2],normalizeExcelDate(r[3]),normalizeExcelDate(r[4]),bool(r[5])?normalizeExcelDateTime(r[6]):null,r[7]||null,Number(r[8]),normalizeExcelDateTime(r[9]),normalizeExcelDateTime(r[10]),version==='3'&&r[11]?normalizeExcelDate(r[11]):null,version==='3'?Number(r[12]):0,version==='3'?Number(r[13]):0,version==='3'&&r[14]?normalizeExcelDateTime(r[14]):null]);
-      for(const r of events)await q.query(`INSERT INTO membership_events(id,member_id,membership_id,event_type,selected_kind,kind,start_date,end_date,voided_at,void_reason,remark,duration_days,detail,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,[r[0],r[1],r[2],r[3],r[4]||null,r[5],normalizeExcelDate(r[6]),normalizeExcelDate(r[7]),bool(r[8])?normalizeExcelDateTime(r[9]):null,r[10]||null,r[11],r[12]?Number(r[12]):null,r[13]||'{}',normalizeExcelDateTime(r[14])]);
+      for(const r of cards)await q.query(`INSERT INTO memberships(id,member_id,kind,start_date,end_date,voided_at,void_reason,version,created_at,updated_at,paused_on,pause_count,total_paused_days,returned_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,[r[0],r[1],r[2],normalizeExcelDate(r[3]),normalizeExcelDate(r[4]),bool(r[5])?normalizeExcelDateTime(r[6]):null,r[7]||null,Number(r[8]),normalizeExcelDateTime(r[9]),normalizeExcelDateTime(r[10]),modern&&r[11]?normalizeExcelDate(r[11]):null,modern?Number(r[12]):0,modern?Number(r[13]):0,modern&&r[14]?normalizeExcelDateTime(r[14]):null]);
+      for(const r of events){
+        const createdIndex=eventHasBilling?19:14;
+        await q.query(`INSERT INTO membership_events(id,member_id,membership_id,event_type,selected_kind,kind,start_date,end_date,voided_at,void_reason,remark,duration_days,detail,cycle_id,refund_basis_days,refund_price,granted_days,gift_days,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,[r[0],r[1],r[2],r[3],r[4]||null,r[5],normalizeExcelDate(r[6]),normalizeExcelDate(r[7]),bool(r[8])?normalizeExcelDateTime(r[9]):null,r[10]||null,r[11],r[12]?Number(r[12]):null,r[13]||'{}',eventHasBilling&&r[14]?r[14]:null,eventHasBilling&&r[15]?Number(r[15]):null,eventHasBilling&&r[16]?Number(r[16]):null,eventHasBilling&&r[17]?Number(r[17]):null,eventHasBilling&&r[18]?Number(r[18]):null,normalizeExcelDateTime(r[createdIndex])]);
+      }
       if(extra)await extra(q);else{
         await q.query("INSERT INTO reminder_state VALUES(1,(now() AT TIME ZONE 'Asia/Shanghai')::date)");
         const migration=await import('node:fs/promises').then(fs=>fs.readFile(resolve(import.meta.dirname,'../migrations/009_schedules_avatars_notifications.sql'),'utf8'));
@@ -175,18 +180,18 @@ export class BackupsService {
     });return {ok:true,members:members.length,cards:cards.length,events:events.length};
   }
 
-  private validateRestore(store:any[],members:any[][],cards:any[][],events:any[][],version:string){
+  private validateRestore(store:any[],members:any[][],cards:any[][],events:any[][],version:string,eventHasBilling=false){
     const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,date=/^\d{4}[\/-]\d{2}[\/-]\d{2}$/;
     const month=Number(store[2]),year=Number(store[3]);if(!store[0]||!Number.isInteger(month)||!Number.isInteger(year)||month<1||year<1||month>3650||year>3650)throw new BadRequestException('门店设置中的卡期天数无效');
     const ids=new Set<string>(),phones=new Set<string>(),numbers=new Set<string>();for(const r of members){if(!uuid.test(r[0])||!r[1]||!/^1[3-9]\d{9}$/.test(r[2])||!r[3])throw new BadRequestException('会员档案包含无效数据');if(version!=='1'&&!/^Y\d{10}$/.test(r[3]))throw new BadRequestException('会员号码格式不正确');if(ids.has(r[0])||phones.has(r[2])||numbers.has(r[3]))throw new BadRequestException('会员档案包含重复ID、手机号或会员号码');ids.add(r[0]);phones.add(r[2]);numbers.add(r[3]);}
     const cardIds=new Set<string>(),cardMembers=new Set<string>();for(const r of cards){if(!uuid.test(r[0])||!ids.has(r[1])||!['year','month'].includes(r[2])||!date.test(r[3])||!date.test(r[4])||normalizeExcelDate(r[4])<normalizeExcelDate(r[3]))throw new BadRequestException('当前会员卡包含无效数据');if(cardIds.has(r[0])||cardMembers.has(r[1]))throw new BadRequestException('每位会员只能有一张当前会员卡');cardIds.add(r[0]);cardMembers.add(r[1]);}
-    if(version==='3')for(const r of cards){
+    if(version==='3'||version==='4')for(const r of cards){
       const count=Number(r[12]),days=Number(r[13]);
       if(!/^\d+$/.test(r[12])||!/^\d+$/.test(r[13])||!Number.isSafeInteger(count)||!Number.isSafeInteger(days)||count>2147483647||days>2147483647)throw new BadRequestException('暂停次数或天数无效');
       if(r[11]){const paused=normalizeExcelDate(r[11]);if(!dateSchema.safeParse(paused).success||paused<normalizeExcelDate(r[3])||paused>normalizeExcelDate(r[4])||bool(r[5])||r[14]||count<1)throw new BadRequestException('暂停状态与会员卡数据不一致');}
       if(r[14]&&(!bool(r[5])||!Number.isFinite(Date.parse(normalizeExcelDateTime(r[14])))))throw new BadRequestException('退卡状态或时间无效');
     }
-    const eventIds=new Set<string>();for(const r of events){if(!uuid.test(r[0])||!ids.has(r[1])||!uuid.test(r[2])||eventIds.has(r[0]))throw new BadRequestException('会员卡历史包含无效或重复数据');try{JSON.parse(r[13]||'{}');}catch{throw new BadRequestException('会员卡历史详情不是有效JSON');}eventIds.add(r[0]);}
+    const eventIds=new Set<string>();for(const r of events){if(!uuid.test(r[0])||!ids.has(r[1])||!uuid.test(r[2])||eventIds.has(r[0]))throw new BadRequestException('会员卡历史包含无效或重复数据');try{JSON.parse(r[13]||'{}');}catch{throw new BadRequestException('会员卡历史详情不是有效JSON');}if(eventHasBilling){if(r[14]&&!uuid.test(r[14]))throw new BadRequestException('会员卡历史周期ID无效');for(const i of [15,16,17,18])if(r[i]&&(!/^\d+$/.test(r[i])||Number(r[i])<0))throw new BadRequestException('会员卡历史退款计费数据无效');}eventIds.add(r[0]);}
   }
 }
 export {MIME as BACKUP_MIME};

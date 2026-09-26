@@ -7,11 +7,33 @@ export function statusOf(card: { start_date: string; end_date: string; voided_at
   return card.returned_at ? 'returned' : card.voided_at ? 'voided' : card.paused_on ? 'paused' : today < card.start_date ? 'upcoming' : today > card.end_date ? 'expired' : 'active';
 }
 export const daysBetween=(from:string,to:string)=>Math.round((Date.parse(to+'T00:00:00Z')-Date.parse(from+'T00:00:00Z'))/86400000);
+export const refundBasis=(kind:string)=>kind==='year'?{basisDays:365,price:499}:{basisDays:30,price:99};
+export interface RefundSegmentInput {
+  id:string; source:'opened'|'renewed'|'migrated'; kind:'year'|'month'; paidDays:number; grantedDays:number; giftDays:number; price:number;
+}
+export interface RefundSegmentResult extends RefundSegmentInput {
+  usedPaidDays:number; usedGiftDays:number; remainingPaidDays:number; rawRefund:number;
+}
+export function segmentedReturnEstimate(card:{start_date:string},segments:RefundSegmentInput[],asOf=todayShanghai(),pausedDays=0){
+  const elapsedDays=Math.max(0,daysBetween(card.start_date,asOf)),usedDays=Math.max(0,elapsedDays-pausedDays);
+  let remainingUsage=usedDays;
+  const calculated:RefundSegmentResult[]=segments.map(segment=>{
+    const usedPaidDays=Math.min(segment.paidDays,remainingUsage);remainingUsage-=usedPaidDays;
+    const usedGiftDays=Math.min(segment.giftDays,remainingUsage);remainingUsage-=usedGiftDays;
+    const remainingPaidDays=Math.max(0,segment.paidDays-usedPaidDays);
+    return {...segment,usedPaidDays,usedGiftDays,remainingPaidDays,rawRefund:remainingPaidDays*segment.price/segment.paidDays};
+  });
+  const paidDays=calculated.reduce((sum,item)=>sum+item.paidDays,0),usedPaidDays=calculated.reduce((sum,item)=>sum+item.usedPaidDays,0);
+  const totalPrice=calculated.reduce((sum,item)=>sum+item.price,0),giftDays=calculated.reduce((sum,item)=>sum+item.giftDays,0);
+  // All segment fractions are added first and the final amount is rounded up once.
+  const rawRefund=calculated.reduce((sum,item)=>sum+item.rawRefund,0);
+  return {asOf,startDate:card.start_date,elapsedDays,pausedDays,usedDays,paidDays,giftDays,totalPrice,
+    usedPercent:paidDays?usedPaidDays/paidDays*100:0,rawRefund,estimatedRefund:Math.max(0,Math.ceil(rawRefund)),segments:calculated};
+}
 export function returnEstimate(card:{kind:string;start_date:string},asOf=todayShanghai(),pausedDays=0){
-  const elapsedDays=Math.max(0,daysBetween(card.start_date,asOf)),usedDays=Math.max(0,elapsedDays-pausedDays),basisDays=card.kind==='year'?365:30,price=card.kind==='year'?499:99;
-  // Calculate directly from integer days. Rounding the percentage first would change the refund.
-  const remainingDays=Math.max(0,basisDays-usedDays);
-  return {asOf,startDate:card.start_date,elapsedDays,pausedDays,usedDays,basisDays,price,usedPercent:usedDays/basisDays*100,estimatedRefund:Math.ceil(remainingDays*price/basisDays)};
+  const {basisDays,price}=refundBasis(card.kind);
+  const result=segmentedReturnEstimate(card,[{id:'current',source:'opened',kind:card.kind as 'year'|'month',paidDays:basisDays,grantedDays:basisDays,giftDays:0,price}],asOf,pausedDays);
+  return {...result,basisDays,price};
 }
 export function addDays(date: string, days: number) {
   const value=new Date(`${date}T00:00:00Z`);value.setUTCDate(value.getUTCDate()+days);return value.toISOString().slice(0,10);

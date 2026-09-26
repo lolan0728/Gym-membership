@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {resolve} from 'node:path';
 import {PGlite} from '@electric-sql/pglite';
-import {addDays,dateSchema,statusOf,todayShanghai,createMemberSchema,cardRemarkRequired,defaultEndDate,daysBetween,returnEstimate} from '../src/domain.js';
+import {addDays,dateSchema,statusOf,todayShanghai,createMemberSchema,cardRemarkRequired,defaultEndDate,daysBetween,returnEstimate,segmentedReturnEstimate} from '../src/domain.js';
 import {formatBeijingDateTime,normalizeExcelDateTime} from '../src/time.js';
 import {summarize} from '../src/reports.js';
 test('Backup time migration changes only the old default and sets new installs to 13:00',async()=>{
@@ -33,6 +33,21 @@ test('Pause duration uses natural days and refund uses the unrounded remaining p
   assert.equal(returnEstimate({kind:'month',start_date:'2026-09-01'},'2026-11-01').estimatedRefund,0);
   assert.equal(returnEstimate({kind:'month',start_date:'2026-10-01'},'2026-09-01').estimatedRefund,99);
   assert.equal(statusOf({start_date:'2026-01-01',end_date:'2026-02-01',voided_at:null,paused_on:'2026-01-15'},'2026-12-01'),'paused');
+});
+
+test('Refund consumes each purchase paid days then gift days before the next renewal',()=>{
+  const segments=[
+    {id:'annual',source:'opened' as const,kind:'year' as const,paidDays:365,grantedDays:395,giftDays:30,price:499},
+    {id:'month',source:'renewed' as const,kind:'month' as const,paidDays:30,grantedDays:30,giftDays:0,price:99}
+  ];
+  const first=segmentedReturnEstimate({start_date:'2026-01-01'},segments,'2026-01-31');
+  assert.equal(first.segments[0].usedPaidDays,30);assert.equal(first.segments[1].usedPaidDays,0);assert.equal(first.segments[1].rawRefund,99);
+  const inGift=segmentedReturnEstimate({start_date:'2026-01-01'},segments,'2027-01-11');
+  assert.equal(inGift.segments[0].usedPaidDays,365);assert.equal(inGift.segments[0].usedGiftDays,10);assert.equal(inGift.segments[1].rawRefund,99);
+  const renewed=segmentedReturnEstimate({start_date:'2026-01-01'},segments,'2027-02-15');
+  assert.equal(renewed.segments[0].usedGiftDays,30);assert.equal(renewed.segments[1].usedPaidDays,15);assert.equal(renewed.estimatedRefund,50);
+  const paused=segmentedReturnEstimate({start_date:'2026-01-01'},segments,'2026-03-17',30);
+  assert.equal(paused.elapsedDays,75);assert.equal(paused.usedDays,45);
 });
 test('Calendar validation rejects non-dates, rollover dates, invalid phone and reversed periods',()=>{
   assert.equal(dateSchema.safeParse('2024-02-29').success,true);
