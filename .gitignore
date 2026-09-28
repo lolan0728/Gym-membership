@@ -17,3 +17,4 @@ apps/desktop/src-tauri/gen/
 output/windows/*.exe
 output/windows/*.zip
 output/windows/*_便携版/
+scripts/hikvision-photo-check/results-*/

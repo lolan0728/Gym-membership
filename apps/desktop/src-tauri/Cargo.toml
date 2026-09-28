@@ -1,6 +1,6 @@
 [package]
 name = "joyfit-desktop"
-version = "1.5.0"
+version = "1.6.0"
 description = "悦体健身会员管理单机版"
 authors = ["JOYFIT"]
 edition = "2021"
@@ -24,6 +24,9 @@ lettre = { version = "0.11", default-features = false, features = ["builder", "s
 mime = "0.3"
 rfd = "0.15"
 chrono = { version = "0.4", features = ["clock"] }
+md-5 = "0.10"
+sha2 = "0.10"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_System_Threading"] }

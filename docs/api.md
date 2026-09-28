@@ -73,3 +73,10 @@
 - 月卡固定退款基准为30天／99元，年卡固定为365天／499元；每段先消耗付费天数，再消耗该段赠送天数，之后才消耗下一次续卡。暂停天数不消耗计费段。
 - `estimatedRefund` 是所有计费段未取整退款相加后统一向上取整的结果。既有顶层 `elapsedDays`、`pausedDays`、`usedDays`、`usedPercent` 和历史退款快照继续兼容。
 - 会员卡历史新增退款计费快照列；完整备份工作簿升级为v4，并继续支持恢复v1、v2及v3工作簿。迁移不改会员卡日期、状态或旧退款结果。
+
+## 桌面 v1.6.0：门禁头像及并发校验
+
+- `POST /admin/members/:id/avatar?version=<当前会员版本>&source=local|hikvision`：multipart `file` 上传，版本为必填，来源默认 local。数据库行锁下核对版本，冲突返回 409 并清理新文件，成功审计记录来源。
+- `POST /admin/members/:id/avatar/remove`：JSON `{ "version": 当前会员版本 }`，同样防止覆盖并发更新。
+- Tauri 命令 `hikvision_settings`、`save_hikvision_settings`、`test_hikvision_connection`、`fetch_hikvision_avatar` 使用本机 Windows 凭据。读取命令接收当前表单手机号，返回照片字节、MIME 及剥离手机号后的设备姓名，从不返回密码。
+- Native 回归：`node apps/desktop/scripts/build-rust.mjs --test`。门禁 UI 回归：`node scripts/hikvision-ui-test.mjs`（模拟 Tauri 返回、真实隔离数据库）。通用回归：`npm test`、`npm run test:ui`。协议测试仅使用回环模拟设备，不访问门店门禁。

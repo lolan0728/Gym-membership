@@ -1,5 +1,6 @@
-import {cp,mkdir,rm,writeFile} from 'node:fs/promises';
+import {cp,mkdir,readFile,rm,writeFile} from 'node:fs/promises';
 import {execFileSync} from 'node:child_process';
+import {createHash} from 'node:crypto';
 import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
@@ -9,18 +10,20 @@ const root=resolve(desktop,'../..');
 const release=resolve(desktop,'src-tauri/target/release');
 const resources=resolve(desktop,'src-tauri/resources');
 const output=resolve(root,'output/windows');
-const folderName='悦体健身会员管理_1.5.0_便携版';
+const folderName='悦体健身会员管理_1.6.0_便携版';
 const folder=resolve(output,folderName);
 const archive=resolve(output,`${folderName}.zip`);
+const checksum=resolve(output,`${folderName}.sha256.txt`);
 
 await mkdir(output,{recursive:true});
 await rm(folder,{recursive:true,force:true});
 await rm(archive,{force:true});
+await rm(checksum,{force:true});
 await mkdir(folder,{recursive:true});
 await cp(resolve(release,'joyfit-desktop.exe'),resolve(folder,'悦体健身会员管理.exe'));
 await cp(resources,resolve(folder,'resources'),{recursive:true});
 await writeFile(resolve(folder,'使用说明.txt'),[
-  '悦体健身会员管理 1.5.0 便携版',
+  '悦体健身会员管理 1.6.0 便携版',
   '',
   '1. 请先完整解压 ZIP 文件。',
   '2. 双击“悦体健身会员管理.exe”启动。',
@@ -35,9 +38,14 @@ await writeFile(resolve(folder,'使用说明.txt'),[
   '11. 完整备份现在为 ZIP，包含 Excel、头像及预约状态；恢复时请选择整个 ZIP。',
   '12. 详情与列表显示大头像，点击可查看大图；编辑时支持点击选择或从Windows资源管理器拖入照片；会员卡面不显示头像。',
   '13. 已暂停、续卡或退卡的数据请使用本版及更新版本管理，不要再用旧版程序打开。',
+  '14. 系统设置新增“海康门禁”：填写设备密码并保存配置、测试连接。在会员头像处点击“从门禁取得”，根据手机号读取照片，裁剪后随会员资料保存。',
+  '15. 门禁凭据仅保存在本机 Windows 凭据中，换电脑后须重新填写；门禁诊断日志为操作日志目录中的 hikvision-年月.log。',
   ''
 ].join('\r\n'),'utf8');
 
 const zipCommand=`Compress-Archive -Path '${folder.replaceAll("'","''")}\\*' -DestinationPath '${archive.replaceAll("'","''")}' -CompressionLevel Optimal -Force`;
 execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',zipCommand],{stdio:'inherit'});
+const sha256=createHash('sha256').update(await readFile(archive)).digest('hex');
+await writeFile(checksum,`${sha256}  ${folderName}.zip\r\n`,'utf8');
 console.log(`Portable package created: ${archive}`);
+console.log(`SHA-256: ${sha256}`);

@@ -252,15 +252,21 @@ test('Avatars and scheduled state round-trip in ZIP; tampered files do not chang
   const member=await create('month',35),path='/admin/members/'+member.id;
   const bytes=await sharp({create:{width:640,height:480,channels:3,background:'#015556'}}).png().toBuffer();
   const imageForm=new FormData();imageForm.append('file',new Blob([new Uint8Array(bytes)],{type:'image/png'}),'photo.png');
-  assert.equal((await call(path+'/avatar','POST',imageForm)).status,201);
+  assert.equal((await call(path+'/avatar?version=1&source=hikvision','POST',imageForm)).status,201);
   const photo=await call(path+'/avatar');assert.equal(photo.status,200);const metadata=await sharp(photo.data).metadata();assert.equal(metadata.width,256);assert.equal(metadata.height,256);
   assert.equal((await call(path+'/avatar','GET',undefined,true)).status,401);
-  const invalid=new FormData();invalid.append('file',new Blob(['broken']),'photo.png');assert.equal((await call(path+'/avatar','POST',invalid)).status,400);assert.deepEqual((await call(path+'/avatar')).data,photo.data);
+  const invalid=new FormData();invalid.append('file',new Blob(['broken']),'photo.png');assert.equal((await call(path+'/avatar?version=2','POST',invalid)).status,400);assert.deepEqual((await call(path+'/avatar')).data,photo.data);
+  assert.equal((await call(path+'/avatar?version=1','POST',imageForm)).status,409);
+  assert.equal((await call(path+'/avatar/remove','POST',{version:1})).status,409);
+  assert.equal((await call(path+'/avatar','POST',imageForm)).status,400);
+  assert.deepEqual((await call(path+'/avatar')).data,photo.data);
+  const audit=(await db.query("SELECT detail FROM audit_logs WHERE member_id=$1 AND action='avatar_updated'",[member.id])).rows;
+  assert.equal(audit.length,1);assert.equal(audit[0].detail.source,'hikvision');
   const booking=await call(path+'/card/pause','POST',{version:1,date:addDays(todayShanghai(),1),remark:'带照片备份'});assert.equal(booking.status,201);
   await app.get(RemindersService).check();const backups=app.get(BackupsService),zip=await backups.exportPackage();const files=(await unpack(zip))!;assert.ok(files.has('avatars/'+member.id+'.jpg'));
   const {pack}=await import('../src/archive.js');const invalidState=JSON.parse(files.get('state.json')!.toString());invalidState.pause_intervals.push({id:'invalid'});files.set('state.json',Buffer.from(JSON.stringify(invalidState)));
   const before=(await call(path)).data;await assert.rejects(backups.restore(await pack(files)));assert.deepEqual((await call(path)).data,before);
-  await call(path+'/avatar/remove','POST');await call(path+'/appointments/'+booking.data.id,'POST',{cancel:true});
+  assert.equal((await call(path+'/avatar/remove','POST',{version:(await call(path)).data.version})).status,201);await call(path+'/appointments/'+booking.data.id,'POST',{cancel:true});
   await backups.restore(zip);const after=(await call(path)).data;assert.ok(after.avatar_key);assert.equal(after.appointments[0].id,booking.data.id);assert.equal((await call(path+'/avatar')).status,200);
 });
 

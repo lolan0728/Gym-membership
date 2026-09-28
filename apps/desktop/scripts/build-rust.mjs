@@ -5,13 +5,18 @@ import {dirname,join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
 const noBundle=process.argv.includes('--no-bundle');
+const testOnly=process.argv.includes('--test');
 const desktop=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const tauriCli=resolve(desktop,'../../node_modules/@tauri-apps/cli/tauri.js');
 const tauriArgs=[tauriCli,'build',...(noBundle?['--no-bundle']:[])];
+function runBuild(env=process.env){
+  if(testOnly)execFileSync('cargo',['test','--lib'],{cwd:resolve(desktop,'src-tauri'),stdio:'inherit',env});
+  else execFileSync(process.execPath,tauriArgs,{stdio:'inherit',env});
+}
 if(!existsSync(tauriCli))throw new Error('未找到 Tauri CLI，请先在项目根目录运行 npm install。');
 
 if(process.platform!=='win32'||process.env.VCINSTALLDIR){
-  execFileSync(process.execPath,tauriArgs,{stdio:'inherit'});
+  runBuild();
   process.exit(0);
 }
 
@@ -34,5 +39,5 @@ try{
     const separator=line.indexOf('=');
     if(separator>0)buildEnvironment[line.slice(0,separator)]=line.slice(separator+1);
   }
-  execFileSync(process.execPath,tauriArgs,{stdio:'inherit',env:buildEnvironment});
+  runBuild(buildEnvironment);
 }finally{try{unlinkSync(environmentScript);}catch{}}

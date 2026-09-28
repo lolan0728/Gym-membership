@@ -2,6 +2,10 @@
 identifier = "desktop-commands"
 description = "允许悦体健身主窗口保存邮件凭据并执行本地备份操作。"
 commands.allow = [
+  "hikvision_settings",
+  "save_hikvision_settings",
+  "test_hikvision_connection",
+  "fetch_hikvision_avatar",
   "save_smtp_credential",
   "test_backup_email",
   "run_backup",

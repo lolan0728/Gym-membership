@@ -1,0 +1,75 @@
+import assert from 'node:assert/strict';
+import {resolve} from 'node:path';
+
+export async function runDoorTests(page,baseUrl,password,root,db){
+  const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  await page.addInitScript(()=>{
+    window.door={name:'王某某',delay:false,error:'',calls:0};
+    window.__TAURI_INTERNALS__={invoke:async(cmd,args)=>{
+      if(cmd==='hikvision_settings')return {address:'http://192.168.110.4',username:'admin',hasPassword:false};
+      if(cmd==='save_hikvision_settings')return {address:args.address,username:args.username,hasPassword:true};
+      if(cmd==='test_hikvision_connection')return;
+      if(cmd==='fetch_hikvision_avatar'){
+        window.door.calls++;
+        if(window.door.delay)await new Promise(r=>window.door.resolve=r);
+        if(window.door.error)throw {message:window.door.error};
+        const canvas=document.createElement('canvas');canvas.width=352;canvas.height=432;
+        const ctx=canvas.getContext('2d');ctx.fillStyle='#018780';ctx.fillRect(0,0,352,432);
+        const bytes=Array.from(Uint8Array.from(atob(canvas.toDataURL('image/png').split(',')[1]),c=>c.charCodeAt(0)));
+        return {bytes,mime:'image/png',deviceName:window.door.name};
+      }
+      throw new Error('Unexpected native command: '+cmd);
+    }};
+  });
+  await page.goto(baseUrl);await page.getByPlaceholder('输入你的管理员密码').fill(password);await page.getByRole('button',{name:'进入工作台'}).click();
+  await page.getByRole('heading',{name:'会员管理',exact:true}).waitFor();
+  const cases=[['王某某','王某某',true],['王某某','王',true],['王','王某某',true],['欧阳某某','欧阳',true],['欧阳','欧阳某某',true],['王某某','李',false],['王小明','王小红',false],['','王',false],['王','',false],[' 王　某某 ','王 某某',true]];
+  assert.deepEqual(await page.evaluate(async cases=>{const {compatibleNames}=await import('/src/hikvision.ts');return cases.map(([a,b])=>compatibleNames(a,b));},cases),cases.map(c=>c[2]));
+  await page.locator('.sidebar nav button').filter({hasText:'系统设置'}).click();
+  await page.getByRole('heading',{name:'海康门禁',exact:true}).waitFor();
+  await page.getByPlaceholder('请输入设备密码，不是 iVMS-4200 软件密码').fill('fixture-password');
+  await page.getByRole('button',{name:'保存配置',exact:true}).click();
+  assert.equal(await page.getByPlaceholder('已保存；地址和用户名不变时可留空').inputValue(),'');
+  await page.getByRole('button',{name:'测试连接',exact:true}).click();await page.getByText('门禁连接及人员读取成功',{exact:true}).waitFor();
+  await page.screenshot({path:resolve(root,'test-results/hikvision-settings.png'),fullPage:true});
+  await page.locator('.sidebar nav button').filter({hasText:'会员管理'}).click();
+  const open=async()=>{await page.getByRole('button',{name:'新增会员',exact:true}).first().click();await page.getByPlaceholder('会员真实姓名').fill('王');};
+  const door=()=>page.getByRole('button',{name:'从门禁取得',exact:true});
+  const crop=()=>page.getByRole('dialog',{name:'裁剪会员头像',exact:true});
+  const mismatch=()=>page.getByRole('dialog',{name:'请核对门禁人员姓名',exact:true});
+  const form=()=>page.getByRole('dialog',{name:/录入新会员|编辑会员资料/});
+  const phone=()=>page.getByPlaceholder('用于检索和联系会员');
+  await open();assert.equal(await door().isDisabled(),true);await page.getByText('请先填写正确的11位手机号',{exact:true}).waitFor();
+  await phone().fill('13800138000');await door().click();await crop().waitFor();assert.equal(await mismatch().count(),0);
+  await crop().getByRole('button',{name:'使用此头像',exact:true}).click();await form().locator('.avatar-editor img').waitFor();
+  await phone().fill('13800138001');await form().locator('.avatar-editor img').waitFor({state:'hidden'});
+  await page.evaluate(()=>{window.door.delay=true;});await door().click();assert.equal(await form().getByRole('button',{name:'保存并开卡'}).isDisabled(),true);
+  await phone().fill('13800138002');await page.evaluate(()=>{window.door.delay=false;window.door.resolve();});
+  await page.waitForTimeout(100);assert.equal(await crop().isVisible(),false);
+  await page.evaluate(()=>{window.door.name='李某某';});await door().click();await mismatch().waitFor();
+  await page.screenshot({path:resolve(root,'test-results/hikvision-name-confirm.png'),fullPage:true});
+  await mismatch().getByRole('button',{name:'取消',exact:true}).click();assert.equal(await form().locator('.avatar-editor img').count(),0);
+  await door().click();await mismatch().getByRole('button',{name:'确认使用',exact:true}).click();await crop().getByRole('button',{name:'使用此头像',exact:true}).click();
+  await page.getByPlaceholder('会员真实姓名').fill('赵');await form().getByRole('button',{name:'保存并开卡'}).click();await mismatch().waitFor();
+  await mismatch().getByRole('button',{name:'取消',exact:true}).click();
+  assert.equal((await db.query("SELECT id FROM members WHERE phone='13800138002'")).rows.length,0);
+  await form().getByRole('button',{name:'保存并开卡'}).click();await mismatch().getByRole('button',{name:'确认使用',exact:true}).click();await form().waitFor({state:'hidden'});
+  const member=(await db.query("SELECT id,avatar_key,version FROM members WHERE phone='13800138002'")).rows[0];assert.ok(member.avatar_key);
+  await page.getByPlaceholder('搜索姓名、手机号或会员号码').fill('13800138002');await page.locator('.members-table .member-identity').first().click();await page.getByRole('tab',{name:'会员资料'}).click();await page.getByRole('button',{name:'编辑会员资料'}).click();
+  const original=await form().locator('.avatar-editor img').getAttribute('src');
+  await page.evaluate(()=>{window.door.error='门禁中未找到该手机号';});await door().click();await page.getByText('门禁中未找到该手机号',{exact:true}).waitFor();assert.equal(await form().locator('.avatar-editor img').getAttribute('src'),original);
+  await page.evaluate(()=>{window.door.error='';window.door.name='赵';});await door().click();await crop().getByRole('button',{name:'使用此头像',exact:true}).click();
+  await phone().fill('13800138003');assert.equal(await form().locator('.avatar-editor img').getAttribute('src'),original);await phone().fill('13800138002');
+  await door().click();await crop().getByRole('button',{name:'使用此头像',exact:true}).click();
+  await page.route('**/api/admin/members/*/avatar?*',route=>route.request().method()==='POST'?route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({message:'模拟头像存储失败'})}):route.continue());
+  await form().getByRole('button',{name:'保存修改',exact:true}).click();await page.getByText(/会员资料已保存，但头像未保存/).waitFor();assert.ok(await form().isVisible());
+  await page.unroute('**/api/admin/members/*/avatar?*');await form().getByRole('button',{name:'保存修改',exact:true}).click();await form().waitFor({state:'hidden'});
+  await page.getByRole('button',{name:'编辑会员资料'}).click();
+  await db.query('UPDATE members SET version=version+1 WHERE id=$1',[member.id]);await page.getByPlaceholder('会员真实姓名').fill('不应覆盖');await form().getByRole('button',{name:'保存修改',exact:true}).click();
+  await page.getByText('资料已被更新，请刷新后重试',{exact:true}).waitFor();assert.equal((await db.query('SELECT name FROM members WHERE id=$1',[member.id])).rows[0].name,'赵');
+  await form().getByRole('button',{name:'取消',exact:true}).click();await page.locator('.el-drawer__close-btn:visible').click();
+  await open();await phone().fill('13800138004');await page.evaluate(()=>{window.door.delay=true;});await door().click();await form().getByRole('button',{name:'取消',exact:true}).click();await page.evaluate(()=>{window.door.delay=false;window.door.resolve();});
+  await open();await page.waitForTimeout(100);assert.equal(await crop().isVisible(),false);assert.equal(await form().locator('.avatar-editor img').count(),0);
+  await form().getByRole('button',{name:'取消',exact:true}).click();assert.deepEqual(errors,[]);
+  console.log('Hikvision UI checks passed: name matrix, settings, staged crop, phone/name edits, stale results, cancellation, preservation, partial save retry and version conflict.');
+}

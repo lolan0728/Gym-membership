@@ -1,3 +1,4 @@
+mod hikvision;
 use chrono::{FixedOffset, Utc};
 use keyring::Entry;
 use lettre::message::{header::ContentType, Attachment, Mailbox, MultiPart, SinglePart};
@@ -149,9 +150,12 @@ fn send_message(
     let builder = Message::builder().from(from).to(to).subject(subject);
     let message = if let Some(job) = attachment {
         let bytes = fs::read(&job.file_path).map_err(|e| format!("读取备份文件失败：{e}"))?;
-        let content_type =
-            ContentType::parse(if job.file_name.ends_with(".zip") { "application/zip" } else { "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })
-                .map_err(|e| e.to_string())?;
+        let content_type = ContentType::parse(if job.file_name.ends_with(".zip") {
+            "application/zip"
+        } else {
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        })
+        .map_err(|e| e.to_string())?;
         builder
             .multipart(
                 MultiPart::mixed()
@@ -447,6 +451,10 @@ pub fn run() {
             }
         }))
         .invoke_handler(tauri::generate_handler![
+            hikvision::hikvision_settings,
+            hikvision::save_hikvision_settings,
+            hikvision::test_hikvision_connection,
+            hikvision::fetch_hikvision_avatar,
             save_smtp_credential,
             test_backup_email,
             run_backup,
