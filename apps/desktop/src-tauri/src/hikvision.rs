@@ -523,7 +523,6 @@ impl Device {
                         found = Some(PersonMatch {
                             id: id.to_owned(),
                             name,
-                            user_type: person["userType"].as_str().unwrap_or("normal").to_owned(),
                             valid: person.get("Valid").cloned().unwrap_or(Value::Null),
                         });
                     }
@@ -614,7 +613,6 @@ impl Device {
             device_name: person.name,
             photo_fingerprint: fingerprint,
             employee_no: person.id,
-            user_type: person.user_type,
             valid: person.valid,
         })
     }
@@ -626,7 +624,6 @@ impl Device {
                 .unwrap(),
             Some(json!({"UserInfo":{
                 "employeeNo":photo.employee_no,
-                "userType":photo.user_type,
                 "Valid":{"enable":true,"beginTime":begin,"endTime":end,"timeType":"local"}
             }})),
             "validity.write",
@@ -666,7 +663,6 @@ impl Device {
 struct PersonMatch {
     id: String,
     name: String,
-    user_type: String,
     valid: Value,
 }
 #[derive(Serialize)]
@@ -678,8 +674,6 @@ pub struct Photo {
     photo_fingerprint: String,
     #[serde(skip)]
     employee_no: String,
-    #[serde(skip)]
-    user_type: String,
     #[serde(skip)]
     valid: Value,
 }

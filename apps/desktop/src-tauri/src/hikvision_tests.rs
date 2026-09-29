@@ -128,7 +128,14 @@ impl Fixture {
                             respond(&mut stream, 200, "", value.to_string().as_bytes());
                         } else if path.contains("UserInfo/Modify") {
                             assert_eq!(body["UserInfo"]["employeeNo"], "7");
-                            assert_eq!(body["UserInfo"]["userType"], "normal");
+                            let user = body["UserInfo"].as_object().unwrap();
+                            assert_eq!(
+                                user.len(),
+                                2,
+                                "only the device identifier and validity may be written"
+                            );
+                            assert!(user.contains_key("Valid"));
+                            assert_eq!(user["Valid"].as_object().unwrap().len(), 4);
                             assert_eq!(body["UserInfo"]["Valid"]["enable"], true);
                             *validity_state.lock().unwrap() = (
                                 body["UserInfo"]["Valid"]["beginTime"]

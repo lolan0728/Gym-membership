@@ -4,7 +4,7 @@ import {resolve} from 'node:path';
 export async function runDoorTests(page,baseUrl,password,root,db){
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
   await page.addInitScript(()=>{
-    window.door={name:'王某某',delay:false,error:'',calls:0,pushes:0,lastPush:null};
+    window.door={name:'王某某',delay:false,error:'',calls:0,previews:0,pushes:0,lastPush:null};
     window.__TAURI_INTERNALS__={invoke:async(cmd,args)=>{
       if(cmd==='hikvision_settings')return {address:'http://192.168.110.4',username:'admin',hasPassword:false};
       if(cmd==='save_hikvision_settings')return {address:args.address,username:args.username,hasPassword:true};
@@ -19,6 +19,7 @@ export async function runDoorTests(page,baseUrl,password,root,db){
         return {bytes,mime:'image/png',deviceName:window.door.name};
       }
       if(cmd==='preview_hikvision_validity'){
+        window.door.previews++;
         const canvas=document.createElement('canvas');canvas.width=352;canvas.height=432;
         const ctx=canvas.getContext('2d');ctx.fillStyle='#018780';ctx.fillRect(0,0,352,432);
         const bytes=Array.from(Uint8Array.from(atob(canvas.toDataURL('image/png').split(',')[1]),c=>c.charCodeAt(0)));
@@ -51,6 +52,8 @@ export async function runDoorTests(page,baseUrl,password,root,db){
   const form=()=>page.getByRole('dialog',{name:/录入新会员|编辑会员资料/});
   const phone=()=>page.getByPlaceholder('用于检索和联系会员');
   await open();assert.equal(await door().isDisabled(),true);await page.getByText('请先填写正确的11位手机号',{exact:true}).waitFor();
+  await page.screenshot({path:resolve(root,'test-results/hikvision-avatar-layout.png'),fullPage:true});
+  assert.equal(await form().locator('.avatar-editor').locator(':scope > div').first().getAttribute('class'),'avatar-editor-door');
   await phone().fill('13800138000');await door().click();await crop().waitFor();assert.equal(await mismatch().count(),0);
   await crop().getByRole('button',{name:'使用此头像',exact:true}).click();await form().locator('.avatar-editor img').waitFor();
   await phone().fill('13800138001');await form().locator('.avatar-editor img').waitFor({state:'hidden'});
@@ -68,6 +71,9 @@ export async function runDoorTests(page,baseUrl,password,root,db){
   const member=(await db.query("SELECT id,avatar_key,version FROM members WHERE phone='13800138002'")).rows[0];assert.ok(member.avatar_key);
   await page.getByPlaceholder('搜索姓名、手机号或会员号码').fill('13800138002');await page.locator('.members-table .member-identity').first().click();await page.getByRole('tab',{name:'会员资料'}).click();await page.getByRole('button',{name:'编辑会员资料'}).click();
   const original=await form().locator('.avatar-editor img').getAttribute('src');
+  assert.equal(await form().getByRole('button',{name:'保存并推送到门禁',exact:true}).count(),0);
+  assert.equal(await form().locator('.avatar-editor-remove').getByRole('button',{name:'移除头像'}).count(),1);
+  assert.equal(await form().locator('.avatar-editor-actions').getByRole('button',{name:'移除头像'}).count(),0);
   await page.evaluate(()=>{window.door.error='门禁中未找到该手机号';});await door().click();await page.getByText('门禁中未找到该手机号',{exact:true}).waitFor();assert.equal(await form().locator('.avatar-editor img').getAttribute('src'),original);
   await page.evaluate(()=>{window.door.error='';window.door.name='赵';});await door().click();await crop().getByRole('button',{name:'使用此头像',exact:true}).click();
   await phone().fill('13800138003');assert.equal(await form().locator('.avatar-editor img').getAttribute('src'),original);await phone().fill('13800138002');
@@ -75,8 +81,22 @@ export async function runDoorTests(page,baseUrl,password,root,db){
   await page.route('**/api/admin/members/*/avatar?*',route=>route.request().method()==='POST'?route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({message:'模拟头像存储失败'})}):route.continue());
   await form().getByRole('button',{name:'保存修改',exact:true}).click();await page.getByText(/会员资料已保存，但头像未保存/).waitFor();assert.ok(await form().isVisible());
   await page.unroute('**/api/admin/members/*/avatar?*');await form().getByRole('button',{name:'保存修改',exact:true}).click();await form().waitFor({state:'hidden'});
-  await page.getByRole('tab',{name:'会员卡记录'}).click();await page.getByRole('button',{name:'同步有效期到门禁',exact:true}).click();
-  const validity=page.getByRole('dialog',{name:'核对人员并推送到门禁',exact:true});await validity.waitFor();assert.equal(await validity.locator('.door-photo-compare img').count(),2);
+  await page.getByRole('tab',{name:'会员卡记录'}).click();
+  const periodRow=page.locator('.current-card-validity-row');
+  assert.equal(await periodRow.getByRole('button',{name:'同步有效期到门禁',exact:true}).count(),1);
+  await page.screenshot({path:resolve(root,'test-results/hikvision-validity-layout.png'),fullPage:true});
+  await periodRow.getByRole('button',{name:'同步有效期到门禁',exact:true}).click();
+  const firstConfirm=page.locator('.el-message-box');await firstConfirm.waitFor();
+  assert.equal(await page.evaluate(()=>window.door.previews),0);
+  await firstConfirm.getByRole('button',{name:'取消',exact:true}).click();await firstConfirm.waitFor({state:'hidden'});
+  assert.equal(await page.evaluate(()=>window.door.previews),0);
+  await periodRow.getByRole('button',{name:'同步有效期到门禁',exact:true}).click();
+  await firstConfirm.getByRole('button',{name:'继续核对照片',exact:true}).click();
+  const validity=page.getByRole('dialog',{name:'核对照片并确认门禁操作',exact:true});await validity.waitFor();assert.equal(await validity.locator('.door-photo-compare img').count(),2);
+  await validity.getByRole('button',{name:'取消',exact:true}).click();await validity.waitFor({state:'hidden'});
+  assert.equal(await page.evaluate(()=>window.door.pushes),0);
+  await periodRow.getByRole('button',{name:'同步有效期到门禁',exact:true}).click();
+  await firstConfirm.getByRole('button',{name:'继续核对照片',exact:true}).click();await validity.waitFor();
   await validity.getByRole('button',{name:'照片一致，确认推送',exact:true}).click();await validity.waitFor({state:'hidden'});
   const pushed=await page.evaluate(()=>({pushes:window.door.pushes,lastPush:window.door.lastPush}));assert.equal(pushed.pushes,1);assert.equal(pushed.lastPush.disabled,false);assert.equal(pushed.lastPush.expectedPhotoFingerprint,'fixture-photo');
   await page.getByRole('tab',{name:'会员资料'}).click();
@@ -84,8 +104,17 @@ export async function runDoorTests(page,baseUrl,password,root,db){
   await db.query('UPDATE members SET version=version+1 WHERE id=$1',[member.id]);await page.getByPlaceholder('会员真实姓名').fill('不应覆盖');await form().getByRole('button',{name:'保存修改',exact:true}).click();
   await page.getByText('资料已被更新，请刷新后重试',{exact:true}).waitFor();assert.equal((await db.query('SELECT name FROM members WHERE id=$1',[member.id])).rows[0].name,'赵');
   await form().getByRole('button',{name:'取消',exact:true}).click();await page.locator('.el-drawer__close-btn:visible').click();
+  const reopen=async()=>{await page.getByPlaceholder('搜索姓名、手机号或会员号码').fill('13800138002');await page.locator('.members-table .member-identity').first().click();await page.getByRole('tab',{name:'会员卡记录'}).click();};
+  const inactive=async(push=false)=>{await reopen();assert.equal(await page.locator('.current-card-validity-row.is-inactive').count(),1);assert.equal(await page.locator('.date-cell.is-inactive').count(),1);const button=page.getByRole('button',{name:'在门禁停用此会员',exact:true});assert.equal(await button.count(),1);if(push){await button.click();const warning=page.locator('.el-message-box');await warning.getByText(/将写入已过期的有效期间/).waitFor();await warning.getByRole('button',{name:'继续核对照片'}).click();const compare=page.getByRole('dialog',{name:'核对照片并确认门禁操作'});await compare.getByRole('button',{name:'照片一致，确认停用'}).click();await compare.waitFor({state:'hidden'});assert.equal((await page.evaluate(()=>window.door.lastPush)).disabled,true);}await page.locator('.el-drawer__close-btn:visible').click();};
+  await db.query('UPDATE memberships SET paused_on=start_date,pause_count=1 WHERE member_id=$1',[member.id]);await page.reload();await inactive(true);
+  await db.query('UPDATE memberships SET paused_on=NULL,voided_at=now(),returned_at=now() WHERE member_id=$1',[member.id]);await page.reload();await inactive();
+  await db.query('UPDATE memberships SET returned_at=NULL WHERE member_id=$1',[member.id]);await page.reload();await inactive();
+  await db.query('UPDATE memberships SET voided_at=NULL WHERE member_id=$1',[member.id]);await page.reload();await reopen();
+  assert.equal(await page.locator('.current-card-validity-row.is-inactive').count(),0);
+  assert.equal(await page.getByRole('button',{name:'同步有效期到门禁',exact:true}).count(),1);
+  await page.locator('.el-drawer__close-btn:visible').click();
   await open();await phone().fill('13800138004');await page.evaluate(()=>{window.door.delay=true;});await door().click();await form().getByRole('button',{name:'取消',exact:true}).click();await page.evaluate(()=>{window.door.delay=false;window.door.resolve();});
   await open();await page.waitForTimeout(100);assert.equal(await crop().isVisible(),false);assert.equal(await form().locator('.avatar-editor img').count(),0);
   await form().getByRole('button',{name:'取消',exact:true}).click();assert.deepEqual(errors,[]);
-  console.log('Hikvision UI checks passed: name matrix, settings, staged crop, validity photo confirmation, phone/name edits, stale results, cancellation, preservation, partial save retry and version conflict.');
+  console.log('Hikvision UI checks passed: avatar layout, name matrix, staged crop, two-step validity confirmation, inactive states, phone/name edits, stale results, cancellation, preservation, partial save retry and version conflict.');
 }

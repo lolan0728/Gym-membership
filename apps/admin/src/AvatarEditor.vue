@@ -134,6 +134,10 @@ onUnmounted(()=>{
     @dragleave.prevent.self="dragActive=false"
     @drop.prevent="drop"
   >
+    <div v-if="desktop" class="avatar-editor-door">
+      <el-button class="avatar-door-button" type="primary" :loading="busy" :disabled="saving||!/^1[3-9]\d{9}$/.test(phone)" @click="fetchFromDoor">从门禁取得</el-button>
+      <small v-if="!/^1[3-9]\d{9}$/.test(phone)">请先填写正确的11位手机号</small>
+    </div>
     <button class="avatar-editor-image" :disabled="busy||saving" type="button" aria-label="选择会员头像" @click="input?.click()">
       <img v-if="!removed&&(preview||props.src)" :src="preview||props.src" alt="会员头像"/>
       <span v-else class="avatar-placeholder">无头像</span>
@@ -145,9 +149,9 @@ onUnmounted(()=>{
     </div>
     <div class="avatar-editor-actions">
       <el-button :disabled="busy||saving" @click="input?.click()">选择照片</el-button>
-      <el-button v-if="desktop" :loading="busy" :disabled="saving||!/^1[3-9]\d{9}$/.test(phone)" @click="fetchFromDoor">从门禁取得</el-button>
-      <small v-if="desktop&&!/^1[3-9]\d{9}$/.test(phone)">请先填写正确的11位手机号</small>
-      <el-button v-if="!removed&&(preview||props.src)" :disabled="busy||saving" text @click="remove">移除头像</el-button>
+    </div>
+    <div v-if="!removed&&(preview||props.src)" class="avatar-editor-remove">
+      <el-button type="danger" plain :disabled="busy||saving" @click="remove">移除头像</el-button>
     </div>
     <input ref="input" type="file" accept="image/jpeg,image/png" hidden @change="choose"/>
   </div>

@@ -66,7 +66,7 @@ export class BackupsService {
       q.query('SELECT id,member_id,membership_id,event_type,selected_kind,kind,start_date,end_date,voided_at,void_reason,remark,duration_days,detail,cycle_id,refund_basis_days,refund_price,granted_days,gift_days,created_at FROM membership_events ORDER BY created_at,id'),
       q.query('SELECT name,phone,month_card_days,year_card_days FROM settings WHERE id=1'),q.query('SELECT data_revision FROM desktop_state WHERE id=1')]);
     const s=store.rows[0];return [
-      {name:'备份信息',headers:['项目','值'],rows:[['格式版本',FORMAT_VERSION],['应用版本','1.7.0'],['导出时间',asTime(new Date())],['数据版本',String(state.rows[0].data_revision)],['会员数量',String(members.rows.length)],['当前会员卡数量',String(cards.rows.length)]]},
+      {name:'备份信息',headers:['项目','值'],rows:[['格式版本',FORMAT_VERSION],['应用版本','1.7.1'],['导出时间',asTime(new Date())],['数据版本',String(state.rows[0].data_revision)],['会员数量',String(members.rows.length)],['当前会员卡数量',String(cards.rows.length)]]},
       {name:'门店设置',headers:['门店名称','联系电话','月卡天数','年卡天数'],rows:[[s.name,s.phone,s.month_card_days,s.year_card_days]]},
       {name:'会员档案',headers:['ID','姓名','手机号','会员号码','档案备注','版本','创建时间','更新时间'],rows:members.rows.map(r=>[r.id,r.name,r.phone,r.card_number,r.note,r.version,asTime(r.created_at),asTime(r.updated_at)])},
       {name:'当前会员卡',headers:['ID','会员ID','卡种','开始日期','到期日期','是否停用','停用时间','停用原因','版本','创建时间','更新时间','暂停开始日期','累计暂停次数','累计已恢复暂停天数','退卡时间'],rows:cards.rows.map(r=>[r.id,r.member_id,r.kind,asDate(r.start_date),asDate(r.end_date),!!r.voided_at,r.voided_at?asTime(r.voided_at):'',r.void_reason||'',r.version,asTime(r.created_at),asTime(r.updated_at),r.paused_on?asDate(r.paused_on):'',r.pause_count,r.total_paused_days,r.returned_at?asTime(r.returned_at):''])},

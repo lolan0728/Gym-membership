@@ -10,7 +10,7 @@ const root=resolve(desktop,'../..');
 const release=resolve(desktop,'src-tauri/target/release');
 const resources=resolve(desktop,'src-tauri/resources');
 const output=resolve(root,'output/windows');
-const folderName='悦体健身会员管理_1.7.0_便携版';
+const folderName='悦体健身会员管理_1.7.1_便携版';
 const folder=resolve(output,folderName);
 const archive=resolve(output,`${folderName}.zip`);
 const checksum=resolve(output,`${folderName}.sha256.txt`);
@@ -23,7 +23,7 @@ await mkdir(folder,{recursive:true});
 await cp(resolve(release,'joyfit-desktop.exe'),resolve(folder,'悦体健身会员管理.exe'));
 await cp(resources,resolve(folder,'resources'),{recursive:true});
 await writeFile(resolve(folder,'使用说明.txt'),[
-  '悦体健身会员管理 1.7.0 便携版',
+  '悦体健身会员管理 1.7.1 便携版',
   '',
   '1. 请先完整解压 ZIP 文件。',
   '2. 双击“悦体健身会员管理.exe”启动。',
@@ -40,7 +40,7 @@ await writeFile(resolve(folder,'使用说明.txt'),[
   '13. 已暂停、续卡或退卡的数据请使用本版及更新版本管理，不要再用旧版程序打开。',
   '14. 系统设置新增“海康门禁”：填写设备密码并保存配置、测试连接。在会员头像处点击“从门禁取得”，根据手机号读取照片，裁剪后随会员资料保存。',
   '15. 门禁凭据仅保存在本机 Windows 凭据中，换电脑后须重新填写；门禁诊断日志为操作日志目录中的 hikvision-年月.log。',
-  '16. 新增、续费或修改可选择“保存并推送到门禁”；推送前必须人工核对管理系统头像和门禁照片。暂停、退卡和作废后可在会员详情中手动同步禁用。',
+  '16. 新增、续费或修改会员卡可选择“保存并推送到门禁”；编辑会员资料只保存到本机。会员详情点击门禁按钮后须先确认操作，再核对两张照片。暂停、退卡和作废后可选择“在门禁停用此会员”。',
   ''
 ].join('\r\n'),'utf8');
 
