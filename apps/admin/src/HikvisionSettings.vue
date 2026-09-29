@@ -11,7 +11,7 @@ async function test(){if(changed()){ElMessage.warning('请先保存门禁配置�
 </script>
 <template>
   <section class="content-panel hikvision-settings" style="margin-top:20px;padding:24px">
-    <h2>海康门禁</h2><p>保存门店门禁连接后，可在会员头像处点击“从门禁取得”。更换电脑后需重新配置。</p>
+    <h2>海康门禁</h2><p>保存门店门禁连接后，可读取会员头像，并在人工核对照片后推送会员有效期。更换电脑后需重新配置。</p>
     <el-form label-position="top" :disabled="busy" @submit.prevent><div class="form-grid">
       <el-form-item label="设备地址"><el-input v-model="form.address" placeholder="http://192.168.110.4"/></el-form-item>
       <el-form-item label="门禁用户名"><el-input v-model="form.username" maxlength="128" autocomplete="off"/></el-form-item>

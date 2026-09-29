@@ -403,7 +403,7 @@ impl Device {
                         "门禁账号或密码错误，请在系统设置中核对，避免反复尝试",
                     ))
                 }
-                403 => return Err(err("permission", "门禁账号没有读取人员或照片的权限")),
+                403 => return Err(err("permission", "门禁账号没有读取或修改人员资料的权限")),
                 404 | 405 | 501 => {
                     return Err(err(
                         "unsupported",
@@ -461,7 +461,7 @@ impl Device {
         }
         Ok(value)
     }
-    fn find(&self, phone: &str) -> Result<(String, String)> {
+    fn find(&self, phone: &str) -> Result<PersonMatch> {
         if !valid_phone(phone) {
             return Err(err("phone", "请先填写正确的11位手机号"));
         }
@@ -520,7 +520,12 @@ impl Device {
                 if numbers.contains(&phone) {
                     matches += 1;
                     if let Some(name) = person_name(name, phone) {
-                        found = Some((id.to_owned(), name));
+                        found = Some(PersonMatch {
+                            id: id.to_owned(),
+                            name,
+                            user_type: person["userType"].as_str().unwrap_or("normal").to_owned(),
+                            valid: person.get("Valid").cloned().unwrap_or(Value::Null),
+                        });
                     }
                 }
             }
@@ -547,8 +552,11 @@ impl Device {
         Err(err("pagination", "门禁人员查询超出范围，请联系维护人员"))
     }
     fn photo(&self, phone: &str) -> Result<Photo> {
-        let (id, name) = self.find(phone)?;
-        let value = self.query("/ISAPI/Intelligent/FDLib/FDSearch?format=json", json!({"searchID":Uuid::new_v4().simple().to_string(),"searchResultPosition":0,"maxResults":1,"faceLibType":"blackFD","FDID":"1","FPID":id}), "face")?;
+        let person = self.find(phone)?;
+        self.photo_for_person(person)
+    }
+    fn photo_for_person(&self, person: PersonMatch) -> Result<Photo> {
+        let value = self.query("/ISAPI/Intelligent/FDLib/FDSearch?format=json", json!({"searchID":Uuid::new_v4().simple().to_string(),"searchResultPosition":0,"maxResults":1,"faceLibType":"blackFD","FDID":"1","FPID":person.id}), "face")?;
         let faces = value["MatchList"].as_array().ok_or_else(|| {
             err(
                 "no_photo",
@@ -558,7 +566,7 @@ impl Device {
         if faces.is_empty() {
             return Err(err("no_photo", "该人员没有登记照片"));
         }
-        if faces.len() != 1 || faces[0]["FPID"].as_str() != Some(id.as_str()) {
+        if faces.len() != 1 || faces[0]["FPID"].as_str() != Some(person.id.as_str()) {
             return Err(err("face_mismatch", "照片记录与匹配人员不一致，已停止取得"));
         }
         let location = faces[0]["faceURL"]
@@ -594,13 +602,72 @@ impl Device {
         let mut limits = image::Limits::default();
         limits.max_alloc = Some(128 * 1024 * 1024);
         reader.limits(limits);
-        reader.decode().map_err(|_| invalid())?;
+        let decoded = reader.decode().map_err(|_| invalid())?;
+        let mut hasher = Sha256::new();
+        hasher.update(decoded.width().to_be_bytes());
+        hasher.update(decoded.height().to_be_bytes());
+        hasher.update(decoded.to_rgba8().as_raw());
+        let fingerprint = format!("{:x}", hasher.finalize());
         Ok(Photo {
             bytes,
             mime: mime.into(),
-            device_name: name,
+            device_name: person.name,
+            photo_fingerprint: fingerprint,
+            employee_no: person.id,
+            user_type: person.user_type,
+            valid: person.valid,
         })
     }
+    fn modify_validity(&self, photo: &Photo, begin: &str, end: &str) -> Result<()> {
+        let bytes = self.request(
+            Method::PUT,
+            self.base
+                .join("/ISAPI/AccessControl/UserInfo/Modify?format=json")
+                .unwrap(),
+            Some(json!({"UserInfo":{
+                "employeeNo":photo.employee_no,
+                "userType":photo.user_type,
+                "Valid":{"enable":true,"beginTime":begin,"endTime":end,"timeType":"local"}
+            }})),
+            "validity.write",
+            256 * 1024,
+        )?;
+        if !bytes.is_empty() {
+            let value: Value = serde_json::from_slice(&bytes)
+                .map_err(|_| err("response", "门禁有效期写入响应格式异常"))?;
+            if value.get("statusCode").is_some_and(|code| code != 1) {
+                return Err(err(
+                    "device_response",
+                    "门禁拒绝修改人员有效期，请检查账号权限和人员状态",
+                ));
+            }
+        }
+        Ok(())
+    }
+    fn verify_validity(&self, phone: &str, begin: &str, end: &str) -> Result<()> {
+        let person = self.find(phone)?;
+        let valid = &person.valid;
+        let read_begin = valid.get("beginTime").and_then(Value::as_str).unwrap_or("");
+        let read_end = valid.get("endTime").and_then(Value::as_str).unwrap_or("");
+        let enabled = valid
+            .get("enable")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if !enabled || read_begin != begin || read_end != end {
+            return Err(err(
+                "verify",
+                "门禁返回的有效期与目标值不一致，请在设备中核对",
+            ));
+        }
+        Ok(())
+    }
+}
+
+struct PersonMatch {
+    id: String,
+    name: String,
+    user_type: String,
+    valid: Value,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -608,6 +675,64 @@ pub struct Photo {
     bytes: Vec<u8>,
     mime: String,
     device_name: String,
+    photo_fingerprint: String,
+    #[serde(skip)]
+    employee_no: String,
+    #[serde(skip)]
+    user_type: String,
+    #[serde(skip)]
+    valid: Value,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ValidityResult {
+    bytes: Vec<u8>,
+    mime: String,
+    device_name: String,
+    photo_fingerprint: String,
+    current_begin_time: String,
+    current_end_time: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PushResult {
+    begin_time: String,
+    end_time: String,
+    disabled: bool,
+}
+
+fn validity_time(start_date: &str, end_date: &str, disabled: bool) -> Result<(String, String)> {
+    let parse = |value: &str| {
+        chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d")
+            .map_err(|_| err("date", "门禁有效期日期格式无效"))
+    };
+    let (start, end) = if disabled {
+        (
+            chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(),
+            chrono::NaiveDate::from_ymd_opt(1970, 1, 2).unwrap(),
+        )
+    } else {
+        let start = parse(start_date)?;
+        let end = parse(end_date)?;
+        if end < start {
+            return Err(err("date", "门禁到期日期不能早于开始日期"));
+        }
+        (start, end)
+    };
+    let minimum = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+    let maximum = chrono::NaiveDate::from_ymd_opt(2037, 12, 31).unwrap();
+    if start < minimum || end > maximum {
+        return Err(err(
+            "date_range",
+            "门禁有效期必须在 1970-01-01 至 2037-12-31 之间",
+        ));
+    }
+    Ok((
+        format!("{}T00:00:00", start.format("%Y-%m-%d")),
+        format!("{}T23:59:59", end.format("%Y-%m-%d")),
+    ))
 }
 
 #[tauri::command]
@@ -632,6 +757,65 @@ pub async fn fetch_hikvision_avatar(
         let result = device.photo(phone.trim());
         device.log("photo.result", json!({"code":result.as_ref().err().map(|e| e.code).unwrap_or("ok"),"elapsedMs":device.started.elapsed().as_millis()})); result
     }).await.map_err(|_| err("internal", "门禁照片读取任务异常，请重试"))?
+}
+
+#[tauri::command]
+pub async fn preview_hikvision_validity(
+    phone: String,
+    state: tauri::State<'_, std::sync::Arc<crate::DesktopState>>,
+) -> Result<ValidityResult> {
+    let directory = state.operation_log_directory.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let device = Device::new(configured()?, Some(directory))?;
+        let photo = device.photo(phone.trim())?;
+        let result = ValidityResult {
+            current_begin_time: photo
+                .valid
+                .get("beginTime")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned(),
+            current_end_time: photo
+                .valid
+                .get("endTime")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned(),
+            bytes: photo.bytes.clone(),
+            mime: photo.mime.clone(),
+            device_name: photo.device_name.clone(),
+            photo_fingerprint: photo.photo_fingerprint.clone(),
+        };
+        device.log(
+            "validity.preview",
+            json!({"code":"ok","elapsedMs":device.started.elapsed().as_millis()}),
+        );
+        Ok(result)
+    })
+    .await
+    .map_err(|_| err("internal", "门禁有效期预览任务异常，请重试"))?
+}
+
+#[tauri::command]
+pub async fn push_hikvision_validity(
+    phone: String,
+    start_date: String,
+    end_date: String,
+    disabled: bool,
+    expected_photo_fingerprint: String,
+    state: tauri::State<'_, std::sync::Arc<crate::DesktopState>>,
+) -> Result<PushResult> {
+    let directory = state.operation_log_directory.clone();
+    tauri::async_runtime::spawn_blocking(move||{
+        let (begin,end)=validity_time(&start_date,&end_date,disabled)?;
+        let device=Device::new(configured()?,Some(directory))?;
+        let photo=device.photo(phone.trim())?;
+        if photo.photo_fingerprint!=expected_photo_fingerprint{return Err(err("photo_changed","门禁登记照片在确认后发生变化，请重新核对人员"));}
+        device.modify_validity(&photo,&begin,&end)?;
+        device.verify_validity(phone.trim(),&begin,&end)?;
+        device.log("validity.result",json!({"code":"ok","disabled":disabled,"elapsedMs":device.started.elapsed().as_millis()}));
+        Ok(PushResult{begin_time:begin,end_time:end,disabled})
+    }).await.map_err(|_|err("internal","门禁有效期写入任务异常，请重试"))?
 }
 
 #[cfg(test)]
@@ -690,5 +874,28 @@ mod tests {
         )
         .unwrap();
         assert!(query.contains("uri=\"/search?format=json\""));
+    }
+    #[test]
+    fn validity_date_rules() {
+        assert_eq!(
+            validity_time("2026-01-02", "2026-12-30", false).unwrap(),
+            ("2026-01-02T00:00:00".into(), "2026-12-30T23:59:59".into())
+        );
+        assert_eq!(
+            validity_time("", "", true).unwrap(),
+            ("1970-01-01T00:00:00".into(), "1970-01-02T23:59:59".into())
+        );
+        assert_eq!(
+            validity_time("2026-12-30", "2026-01-02", false)
+                .unwrap_err()
+                .code,
+            "date"
+        );
+        assert_eq!(
+            validity_time("2026-01-01", "2038-01-01", false)
+                .unwrap_err()
+                .code,
+            "date_range"
+        );
     }
 }

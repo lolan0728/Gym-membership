@@ -26,7 +26,7 @@ export class Db implements Queryable, OnModuleInit, OnModuleDestroy {
     if (!existing.rows.length) {
       if (desktopMode()) return;
       const password = process.env.ADMIN_INITIAL_PASSWORD;
-      if (!password || password.length < 8 || password.includes('REPLACE_')) throw new Error('Set a unique ADMIN_INITIAL_PASSWORD (at least 8 characters) before first start');
+      if (!password || password.length < 6 || password.includes('REPLACE_')) throw new Error('Set a unique ADMIN_INITIAL_PASSWORD (at least 6 characters) before first start');
       await this.query('INSERT INTO administrators(id,password_hash) VALUES(1,$1) ON CONFLICT DO NOTHING', [await hashPassword(password)]);
     }
   }

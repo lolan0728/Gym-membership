@@ -93,7 +93,7 @@ try{
   const smtpBox=await smtpInput.boundingBox(),smtpButtonBox=await smtpButton.boundingBox();assert.ok(smtpBox&&smtpBox.width<=480,'SMTP credential field should have a moderate desktop width');assert.ok(smtpButtonBox&&smtpBox&&smtpButtonBox.x>smtpBox.x+smtpBox.width,'Test-email button should sit immediately after the credential field');
   const backupButtons=page.locator('.backup-primary-actions').getByRole('button');assert.deepEqual(await backupButtons.allInnerTexts(),['立即完整备份','从完整备份恢复']);const backupBoxes=await backupButtons.evaluateAll(elements=>elements.map(element=>element.getBoundingClientRect().y));assert.equal(new Set(backupBoxes.map(Math.round)).size,1,'Backup and restore buttons must share one row');
   assert.equal(await page.getByRole('button',{name:'手动导出',exact:true}).count(),0,'Manual export entry must be removed');
-  assert.match(await page.getByPlaceholder('至少 8 位，可使用纯数字').getAttribute('placeholder'),/至少 8 位/);
+  assert.match(await page.getByPlaceholder('至少 6 位，可使用纯数字').getAttribute('placeholder'),/至少 6 位/);
   await page.screenshot({path:resolve(root,'test-results/settings.png'),fullPage:true});
   await page.locator('.sidebar nav button').filter({hasText:'会员管理'}).click();await page.getByRole('button',{name:'新增会员',exact:true}).first().click();
   await page.getByRole('dialog').waitFor();assert.equal(await page.getByText('原有卡号（选填）').count(),0);await page.locator('.el-dialog:visible').getByText('备注（选填）',{exact:true}).waitFor();await page.getByText('会员档案备注',{exact:true}).waitFor();

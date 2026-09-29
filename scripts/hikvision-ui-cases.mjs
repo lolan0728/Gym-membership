@@ -4,7 +4,7 @@ import {resolve} from 'node:path';
 export async function runDoorTests(page,baseUrl,password,root,db){
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
   await page.addInitScript(()=>{
-    window.door={name:'王某某',delay:false,error:'',calls:0};
+    window.door={name:'王某某',delay:false,error:'',calls:0,pushes:0,lastPush:null};
     window.__TAURI_INTERNALS__={invoke:async(cmd,args)=>{
       if(cmd==='hikvision_settings')return {address:'http://192.168.110.4',username:'admin',hasPassword:false};
       if(cmd==='save_hikvision_settings')return {address:args.address,username:args.username,hasPassword:true};
@@ -17,6 +17,17 @@ export async function runDoorTests(page,baseUrl,password,root,db){
         const ctx=canvas.getContext('2d');ctx.fillStyle='#018780';ctx.fillRect(0,0,352,432);
         const bytes=Array.from(Uint8Array.from(atob(canvas.toDataURL('image/png').split(',')[1]),c=>c.charCodeAt(0)));
         return {bytes,mime:'image/png',deviceName:window.door.name};
+      }
+      if(cmd==='preview_hikvision_validity'){
+        const canvas=document.createElement('canvas');canvas.width=352;canvas.height=432;
+        const ctx=canvas.getContext('2d');ctx.fillStyle='#018780';ctx.fillRect(0,0,352,432);
+        const bytes=Array.from(Uint8Array.from(atob(canvas.toDataURL('image/png').split(',')[1]),c=>c.charCodeAt(0)));
+        return {bytes,mime:'image/png',deviceName:window.door.name,photoFingerprint:'fixture-photo',currentBeginTime:'2026-01-01T00:00:00',currentEndTime:'2026-12-31T23:59:59'};
+      }
+      if(cmd==='push_hikvision_validity'){
+        if(args.expectedPhotoFingerprint!=='fixture-photo')throw {message:'照片指纹不一致'};
+        window.door.pushes++;window.door.lastPush=args;
+        return {bytes:[],mime:'image/png',deviceName:window.door.name,photoFingerprint:'fixture-photo',currentBeginTime:args.startDate+'T00:00:00',currentEndTime:args.endDate+'T23:59:59'};
       }
       throw new Error('Unexpected native command: '+cmd);
     }};
@@ -64,6 +75,11 @@ export async function runDoorTests(page,baseUrl,password,root,db){
   await page.route('**/api/admin/members/*/avatar?*',route=>route.request().method()==='POST'?route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({message:'模拟头像存储失败'})}):route.continue());
   await form().getByRole('button',{name:'保存修改',exact:true}).click();await page.getByText(/会员资料已保存，但头像未保存/).waitFor();assert.ok(await form().isVisible());
   await page.unroute('**/api/admin/members/*/avatar?*');await form().getByRole('button',{name:'保存修改',exact:true}).click();await form().waitFor({state:'hidden'});
+  await page.getByRole('tab',{name:'会员卡记录'}).click();await page.getByRole('button',{name:'同步有效期到门禁',exact:true}).click();
+  const validity=page.getByRole('dialog',{name:'核对人员并推送到门禁',exact:true});await validity.waitFor();assert.equal(await validity.locator('.door-photo-compare img').count(),2);
+  await validity.getByRole('button',{name:'照片一致，确认推送',exact:true}).click();await validity.waitFor({state:'hidden'});
+  const pushed=await page.evaluate(()=>({pushes:window.door.pushes,lastPush:window.door.lastPush}));assert.equal(pushed.pushes,1);assert.equal(pushed.lastPush.disabled,false);assert.equal(pushed.lastPush.expectedPhotoFingerprint,'fixture-photo');
+  await page.getByRole('tab',{name:'会员资料'}).click();
   await page.getByRole('button',{name:'编辑会员资料'}).click();
   await db.query('UPDATE members SET version=version+1 WHERE id=$1',[member.id]);await page.getByPlaceholder('会员真实姓名').fill('不应覆盖');await form().getByRole('button',{name:'保存修改',exact:true}).click();
   await page.getByText('资料已被更新，请刷新后重试',{exact:true}).waitFor();assert.equal((await db.query('SELECT name FROM members WHERE id=$1',[member.id])).rows[0].name,'赵');
@@ -71,5 +87,5 @@ export async function runDoorTests(page,baseUrl,password,root,db){
   await open();await phone().fill('13800138004');await page.evaluate(()=>{window.door.delay=true;});await door().click();await form().getByRole('button',{name:'取消',exact:true}).click();await page.evaluate(()=>{window.door.delay=false;window.door.resolve();});
   await open();await page.waitForTimeout(100);assert.equal(await crop().isVisible(),false);assert.equal(await form().locator('.avatar-editor img').count(),0);
   await form().getByRole('button',{name:'取消',exact:true}).click();assert.deepEqual(errors,[]);
-  console.log('Hikvision UI checks passed: name matrix, settings, staged crop, phone/name edits, stale results, cancellation, preservation, partial save retry and version conflict.');
+  console.log('Hikvision UI checks passed: name matrix, settings, staged crop, validity photo confirmation, phone/name edits, stale results, cancellation, preservation, partial save retry and version conflict.');
 }

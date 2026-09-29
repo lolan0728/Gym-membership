@@ -6,7 +6,7 @@ import {pack,unpack,inspectArchive} from './archive.js';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
-import { mkdir, readdir, unlink, writeFile } from 'node:fs/promises';
+import { access, mkdir, readdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { Db, Queryable } from './db.js';
 import { audit, nextMemberNumber } from './members.js';
 import { OperationLogsService } from './operation-logs.js';
@@ -21,7 +21,7 @@ const asDate=(value:any)=>String(value instanceof Date?value.toISOString():value
 const asTime=(value:any)=>new Date(new Date(value).getTime()+8*3600000);
 const clean=(value:any)=>value===null||value===undefined?'':value instanceof Date?new Date(value.getTime()-8*3600000).toISOString():typeof value==='object'?JSON.stringify(value):String(value);
 const bool=(value:any)=>value===true||value===1||value==='1'||value==='true';
-type BackupSource='manual'|'automatic'|'pre_restore';
+type BackupSource='manual'|'automatic'|'pre_restore'|'change';
 type SheetDefinition={name:string;headers:string[];rows:any[][]};
 
 @Injectable()
@@ -38,11 +38,15 @@ export class BackupsService {
     let automaticStatus='waiting',automaticStatusText='等待设定时间';
     if(automatic?.status==='sent'){automaticStatus='completed';automaticStatusText='今天已备份';}
     else if(automatic?.status==='email_failed'){automaticStatus='failed';automaticStatusText='邮件发送失败';}
-    else if(automatic){automaticStatus='completed';automaticStatusText=row.sender_email?'等待发送':'今天已备份（已保存到本地）';}
+    else if(automatic){automaticStatus='completed';automaticStatusText='今天已备份（已保存到本地）';}
+    const changeState=(await this.db.query('SELECT pending_backup_revision,pending_backup_at,last_emailed_revision,pending_backup_error FROM desktop_state WHERE id=1')).rows[0];
+    const pendingChange=Number(changeState.pending_backup_revision)>Number(changeState.last_emailed_revision);
     return {directory:row.directory||this.defaultDirectory(),senderEmail:row.sender_email,recipientEmail:row.recipient_email,
       scheduleTime:row.schedule_time,retentionCount:Number(row.retention_count),latest:latest?this.presentJob(latest):null,
       automaticStatus,automaticStatusText,today,latestAutomaticDate:latestAutomatic?.scheduled_date?String(latestAutomatic.scheduled_date).slice(0,10):null,
-      initializedDate:administrator?.created_at?beijingDay(administrator.created_at):null};
+      initializedDate:administrator?.created_at?beijingDay(administrator.created_at):null,
+      changeBackupStatusText:pendingChange?(row.sender_email?'数据已保存，等待静默备份邮件':'数据已保存，配置邮箱后发送备份'):'业务数据备份邮件已是最新',
+      changeBackupError:changeState.pending_backup_error||''};
   }
 
   async updateSettings(input:{directory:string;senderEmail:string;recipientEmail:string;scheduleTime:string;retentionCount:number}){
@@ -51,7 +55,7 @@ export class BackupsService {
     await this.db.tx(async q=>{
       await q.query(`UPDATE backup_settings SET directory=$1,sender_email=$2,recipient_email=$3,schedule_time=$4,
         retention_count=$5,updated_at=now() WHERE id=1`,[directory,senderEmail,recipientEmail,input.scheduleTime,input.retentionCount]);
-      await audit(q,'backup_settings_updated',null,{directory,senderEmail,recipientEmail,scheduleTime:input.scheduleTime,retentionCount:input.retentionCount});
+      await audit(q,'backup_settings_updated',null,{directory,senderEmail,recipientEmail,scheduleTime:input.scheduleTime,retentionCount:input.retentionCount},'owner',false);
     });return this.settings();
   }
 
@@ -62,7 +66,7 @@ export class BackupsService {
       q.query('SELECT id,member_id,membership_id,event_type,selected_kind,kind,start_date,end_date,voided_at,void_reason,remark,duration_days,detail,cycle_id,refund_basis_days,refund_price,granted_days,gift_days,created_at FROM membership_events ORDER BY created_at,id'),
       q.query('SELECT name,phone,month_card_days,year_card_days FROM settings WHERE id=1'),q.query('SELECT data_revision FROM desktop_state WHERE id=1')]);
     const s=store.rows[0];return [
-      {name:'备份信息',headers:['项目','值'],rows:[['格式版本',FORMAT_VERSION],['应用版本','1.5.0'],['导出时间',asTime(new Date())],['数据版本',String(state.rows[0].data_revision)],['会员数量',String(members.rows.length)],['当前会员卡数量',String(cards.rows.length)]]},
+      {name:'备份信息',headers:['项目','值'],rows:[['格式版本',FORMAT_VERSION],['应用版本','1.7.0'],['导出时间',asTime(new Date())],['数据版本',String(state.rows[0].data_revision)],['会员数量',String(members.rows.length)],['当前会员卡数量',String(cards.rows.length)]]},
       {name:'门店设置',headers:['门店名称','联系电话','月卡天数','年卡天数'],rows:[[s.name,s.phone,s.month_card_days,s.year_card_days]]},
       {name:'会员档案',headers:['ID','姓名','手机号','会员号码','档案备注','版本','创建时间','更新时间'],rows:members.rows.map(r=>[r.id,r.name,r.phone,r.card_number,r.note,r.version,asTime(r.created_at),asTime(r.updated_at)])},
       {name:'当前会员卡',headers:['ID','会员ID','卡种','开始日期','到期日期','是否停用','停用时间','停用原因','版本','创建时间','更新时间','暂停开始日期','累计暂停次数','累计已恢复暂停天数','退卡时间'],rows:cards.rows.map(r=>[r.id,r.member_id,r.kind,asDate(r.start_date),asDate(r.end_date),!!r.voided_at,r.voided_at?asTime(r.voided_at):'',r.void_reason||'',r.version,asTime(r.created_at),asTime(r.updated_at),r.paused_on?asDate(r.paused_on):'',r.pause_count,r.total_paused_days,r.returned_at?asTime(r.returned_at):''])},
@@ -83,37 +87,60 @@ export class BackupsService {
   }
   async exportBuffer(){return Buffer.from(await(await this.workbook()).xlsx.writeBuffer());}
 
-  async exportPackage(){
+  private async packageSnapshot(){
     return this.db.tx(async q=>{
       await q.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+      const revision=Number((await q.query('SELECT data_revision FROM desktop_state WHERE id=1')).rows[0].data_revision);
       const files=new Map<string,Buffer>();files.set('members.xlsx',Buffer.from(await(await this.workbook(q)).xlsx.writeBuffer()));
       const members=(await q.query('SELECT id,avatar_key FROM members')).rows;
       for(const m of members)if(m.avatar_key)files.set('avatars/'+m.id+'.jpg',await this.storage.get(m.avatar_key));
       const state:any={members:members.map(m=>({id:m.id,avatar:m.avatar_key?'avatars/'+m.id+'.jpg':null})),cards:(await q.query('SELECT member_id,cycle_id,pause_review_required FROM memberships')).rows};
       for(const table of ['pause_intervals','card_appointments','notifications','reminder_state'])state[table]=(await q.query('SELECT * FROM '+table)).rows.map(row=>Object.fromEntries(Object.entries(row).map(([key,value])=>[key,key.endsWith('_date')&&value?asDate(value).replaceAll('/','-'):value])));
-      files.set('state.json',Buffer.from(JSON.stringify(state)));return pack(files);
+      files.set('state.json',Buffer.from(JSON.stringify(state)));return {buffer:await pack(files),revision};
     });
   }
-  async createLocal(source:BackupSource='manual',scheduledDate?:string){
+  async exportPackage(){return (await this.packageSnapshot()).buffer;}
+  async createLocal(source:BackupSource='manual',scheduledDate?:string,expectedRevision?:number){
     const day=scheduledDate||beijingDay();
     if(source==='automatic'){
       const existing=(await this.db.query("SELECT * FROM backup_jobs WHERE trigger_source='automatic' AND scheduled_date=$1",[day])).rows[0];
       if(existing)return {skipped:true,job:this.presentJob(existing)};
     }
-    const revision=Number((await this.db.query('SELECT data_revision FROM desktop_state WHERE id=1')).rows[0].data_revision),config=await this.settings();
-    const directory=resolve(config.directory);await mkdir(directory,{recursive:true});const fileName=`悦体健身会员数据备份-${backupStamp()}-${randomUUID().slice(0,8)}.zip`,filePath=join(directory,fileName);
-    await writeFile(filePath,await this.exportPackage(),{flag:'wx'});
+    const config=await this.settings(),directory=resolve(config.directory);let snapshot:{buffer:Buffer;revision:number};
+    try{snapshot=await this.packageSnapshot();if(source==='change'&&expectedRevision!==snapshot.revision)throw new ConflictException('业务数据在备份开始前已更新，将等待静默期后重新备份');await mkdir(directory,{recursive:true});}
+    catch(error){if(source==='change')await this.db.query('UPDATE desktop_state SET pending_backup_error=$1 WHERE id=1',[String((error as Error).message||error).slice(0,1000)]);throw error;}
+    const revision=snapshot.revision,fileName=`悦体健身会员数据备份-${backupStamp()}-${randomUUID().slice(0,8)}.zip`,filePath=join(directory,fileName),temporary=filePath+'.tmp';
+    try{await writeFile(temporary,snapshot.buffer,{flag:'wx'});await rename(temporary,filePath);}catch(error){await unlink(temporary).catch(()=>{});if(source==='change')await this.db.query('UPDATE desktop_state SET pending_backup_error=$1 WHERE id=1',[`生成本地备份失败：${String((error as Error).message||error)}`.slice(0,1000)]);throw error;}
+    let status='local_saved';
+    if(source==='change'){
+      const current=Number((await this.db.query('SELECT pending_backup_revision FROM desktop_state WHERE id=1')).rows[0].pending_backup_revision);
+      if(current!==revision)status='superseded';
+    }
     let job:any;try{job=(await this.db.query(`INSERT INTO backup_jobs(id,file_path,file_name,data_revision,status,trigger_source,scheduled_date)
-      VALUES($1,$2,$3,$4,'local_saved',$5,$6) RETURNING *`,[randomUUID(),filePath,fileName,revision,source,source==='automatic'?day:null])).rows[0];}
-    catch(error:any){if(source==='automatic'&&error?.code==='23505'){await unlink(filePath).catch(()=>{});job=(await this.db.query("SELECT * FROM backup_jobs WHERE trigger_source='automatic' AND scheduled_date=$1",[day])).rows[0];return {skipped:true,job:this.presentJob(job)};}throw error;}
+      VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *`,[randomUUID(),filePath,fileName,revision,status,source,source==='automatic'?day:null])).rows[0];}
+    catch(error:any){if(source==='automatic'&&error?.code==='23505'){await unlink(filePath).catch(()=>{});job=(await this.db.query("SELECT * FROM backup_jobs WHERE trigger_source='automatic' AND scheduled_date=$1",[day])).rows[0];return {skipped:true,job:this.presentJob(job)};}await unlink(filePath).catch(()=>{});throw error;}
+    if(source==='change'&&status==='local_saved')await this.db.query("UPDATE desktop_state SET pending_backup_error='' WHERE id=1");
     await this.trim(directory,config.retentionCount);return {skipped:false,job:this.presentJob(job)};
   }
 
-  async markEmail(id:string,ok:boolean,error=''){const {rows}=await this.db.query(`UPDATE backup_jobs SET status=$2,error=$3,sent_at=CASE WHEN $2='sent' THEN now() ELSE NULL END WHERE id=$1 RETURNING *`,[id,ok?'sent':'email_failed',error.slice(0,1000)]);if(!rows[0])throw new NotFoundException('备份记录不存在');return this.presentJob(rows[0]);}
-  async automaticPending(){const {rows}=await this.db.query("SELECT * FROM backup_jobs WHERE trigger_source='automatic' AND scheduled_date=$1 AND status IN ('local_saved','email_failed') LIMIT 1",[beijingDay()]);return rows[0]?this.presentJob(rows[0]):null;}
+  async markEmail(id:string,ok:boolean,error=''){
+    return this.db.tx(async q=>{const {rows}=await q.query(`UPDATE backup_jobs SET status=$2,error=$3,sent_at=CASE WHEN $2='sent' THEN now() ELSE NULL END WHERE id=$1 RETURNING *`,[id,ok?'sent':'email_failed',error.slice(0,1000)]);if(!rows[0])throw new NotFoundException('备份记录不存在');const row=rows[0];if(row.trigger_source==='change'){if(ok)await q.query(`UPDATE desktop_state SET last_emailed_revision=GREATEST(last_emailed_revision,$1),pending_backup_error=CASE WHEN pending_backup_revision=$1 THEN '' ELSE pending_backup_error END,pending_backup_at=CASE WHEN pending_backup_revision=$1 THEN NULL ELSE pending_backup_at END WHERE id=1`,[row.data_revision]);else await q.query('UPDATE desktop_state SET pending_backup_error=$1 WHERE id=1 AND pending_backup_revision=$2',[error.slice(0,1000),row.data_revision]);}return this.presentJob(row);});
+  }
+  async changePending(startup=false){
+    const config=await this.settings();
+    const state=(await this.db.query('SELECT pending_backup_revision,pending_backup_at,last_emailed_revision FROM desktop_state WHERE id=1')).rows[0];
+    const revision=Number(state.pending_backup_revision),sent=Number(state.last_emailed_revision);
+    if(!config.senderEmail||revision<=sent)return {action:'none',revision,job:null,settings:config};
+    await this.db.query("UPDATE backup_jobs SET status='superseded',error='' WHERE trigger_source='change' AND status IN ('local_saved','email_failed') AND data_revision<>$1",[revision]);
+    const existing=(await this.db.query("SELECT * FROM backup_jobs WHERE trigger_source='change' AND data_revision=$1 AND status IN ('local_saved','email_failed') ORDER BY created_at DESC LIMIT 1",[revision])).rows[0];
+    if(existing){try{await access(existing.file_path);return {action:'send',revision,job:this.presentJob(existing),settings:config};}catch{await this.db.query("UPDATE backup_jobs SET status='superseded',error='' WHERE id=$1",[existing.id]);}}
+    const due=startup||!!state.pending_backup_at&&Date.now()-new Date(state.pending_backup_at).getTime()>=10*60*1000;
+    return {action:due?'package':'wait',revision,job:null,settings:config};
+  }
+  async automaticPending(){const {rows}=await this.db.query("SELECT * FROM backup_jobs WHERE trigger_source='automatic' AND scheduled_date=$1 AND status='email_failed' LIMIT 1",[beijingDay()]);return rows[0]?this.presentJob(rows[0]):null;}
   async jobs(){return(await this.db.query('SELECT * FROM backup_jobs ORDER BY created_at DESC LIMIT 30')).rows.map(row=>this.presentJob(row));}
   private presentJob(row:any){return {id:row.id,filePath:row.file_path,fileName:row.file_name,dataRevision:Number(row.data_revision),status:row.status,error:row.error||'',triggerSource:row.trigger_source||'manual',scheduledDate:row.scheduled_date?String(row.scheduled_date).slice(0,10):null,createdAt:row.created_at,sentAt:row.sent_at};}
-  private async trim(directory:string,keep:number){const files=(await readdir(directory,{withFileTypes:true})).filter(f=>f.isFile()&&/^悦体健身会员数据备份-\d{14}(?:-[0-9a-f]{8})?\.(xlsx|zip)$/.test(f.name)).map(f=>f.name).sort().reverse();for(const name of files.slice(keep))await unlink(join(directory,basename(name))).catch(()=>{});}
+  private async trim(directory:string,keep:number){const protectedFiles=new Set((await this.db.query("SELECT file_name FROM backup_jobs WHERE status='email_failed' OR (status='local_saved' AND trigger_source='change')")).rows.map(r=>r.file_name));const files=(await readdir(directory,{withFileTypes:true})).filter(f=>f.isFile()&&/^悦体健身会员数据备份-\d{14}(?:-[0-9a-f]{8})?\.(xlsx|zip)$/.test(f.name)).map(f=>f.name).sort().reverse();let retained=0;for(const name of files){if(protectedFiles.has(name)||retained++<keep)continue;await unlink(join(directory,basename(name))).catch(()=>{});}}
 
   async restore(buffer:Buffer){
     const files=await unpack(buffer);

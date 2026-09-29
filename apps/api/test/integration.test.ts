@@ -37,7 +37,7 @@ after(async()=>{await app?.close();if(dataDir)await rm(dataDir,{recursive:true,f
 
 test('First run requires setup and creates the local administrator',async()=>{
   assert.deepEqual((await call('/setup/status','GET',undefined,true)).data,{required:true});
-  assert.equal((await call('/setup','POST',{name:'悦体健身',phone:'13800138000',monthCardDays:30,yearCardDays:365,password:'1234567',backupDirectory:backupDir,senderEmail:'',recipientEmail:''},true)).status,400);
+  assert.equal((await call('/setup','POST',{name:'悦体健身',phone:'13800138000',monthCardDays:30,yearCardDays:365,password:'12345',backupDirectory:backupDir,senderEmail:'',recipientEmail:''},true)).status,400);
   assert.deepEqual((await call('/setup/status','GET',undefined,true)).data,{required:true});
   const setup=await call('/setup','POST',{name:'悦体健身',phone:'13800138000',monthCardDays:30,yearCardDays:365,password,backupDirectory:backupDir,senderEmail:'',recipientEmail:''},true);assert.equal(setup.status,201,JSON.stringify(setup.data));
   assert.deepEqual((await call('/setup/status','GET',undefined,true)).data,{required:false});
@@ -45,12 +45,12 @@ test('First run requires setup and creates the local administrator',async()=>{
   const login=await call('/admin/login','POST',{password},true);assert.equal(login.status,201);cookie=login.res.headers.get('set-cookie')!.split(';')[0];
 });
 
-test('Eight-digit numeric administrator passwords are accepted',async()=>{
-  assert.equal((await call('/admin/password','POST',{current:password,next:'1234567'})).status,400);
-  assert.equal((await call('/admin/password','POST',{current:password,next:'12345678'})).status,201);
+test('Six-digit numeric administrator passwords are accepted',async()=>{
+  assert.equal((await call('/admin/password','POST',{current:password,next:'12345'})).status,400);
+  assert.equal((await call('/admin/password','POST',{current:password,next:'123456'})).status,201);
   assert.equal((await call('/admin/login','POST',{password},true)).status,401);
-  const numeric=await call('/admin/login','POST',{password:'12345678'},true);assert.equal(numeric.status,201);cookie=numeric.res.headers.get('set-cookie')!.split(';')[0];
-  assert.equal((await call('/admin/password','POST',{current:'12345678',next:password})).status,201);
+  const numeric=await call('/admin/login','POST',{password:'123456'},true);assert.equal(numeric.status,201);cookie=numeric.res.headers.get('set-cookie')!.split(';')[0];
+  assert.equal((await call('/admin/password','POST',{current:'123456',next:password})).status,201);
   const restored=await call('/admin/login','POST',{password},true);assert.equal(restored.status,201);cookie=restored.res.headers.get('set-cookie')!.split(';')[0];
 });
 
@@ -101,6 +101,7 @@ test('Automatic backups are unique per Beijing date and reuse the same job',asyn
   const backups=app.get(BackupsService),date=todayShanghai();const first=await backups.createLocal('automatic',date),second=await backups.createLocal('automatic',date);
   assert.equal(first.skipped,false);assert.equal(second.skipped,true);assert.equal(second.job.id,first.job.id);
   const count=Number((await db.query("SELECT count(*)::int AS n FROM backup_jobs WHERE trigger_source='automatic' AND scheduled_date=$1",[date])).rows[0].n);assert.equal(count,1);
+  assert.equal(await backups.automaticPending(),null,'daily local backups must not enter the email queue');
 });
 
 test('Member numbers use a shared monthly sequence',async()=>{
@@ -123,6 +124,28 @@ test('Legacy v2 backup keeps original member numbers and dates',async()=>{
   await backups.restore(Buffer.from(await book.xlsx.writeBuffer()));
   assert.deepEqual((await db.query('SELECT id,phone,card_number FROM members ORDER BY id')).rows,before);
   assert.equal((await db.query('SELECT count(*)::int AS n FROM memberships WHERE paused_on IS NOT NULL OR returned_at IS NOT NULL OR pause_count<>0')).rows[0].n,0);
+});
+
+test('Business changes wait for quiet time, persist across startup and supersede stale ZIPs',async()=>{
+  const backups=app.get(BackupsService);
+  await call('/admin/backup/settings','PATCH',{directory:backupDir,senderEmail:'backup@qq.com',recipientEmail:'backup@qq.com',scheduleTime:'13:00',retentionCount:30});
+  const before=Number((await db.query('SELECT data_revision FROM desktop_state WHERE id=1')).rows[0].data_revision);
+  await create('month',35);
+  const state=(await db.query('SELECT * FROM desktop_state WHERE id=1')).rows[0];
+  assert.equal(Number(state.pending_backup_revision),before+1);assert.ok(state.pending_backup_at);
+  assert.equal((await backups.changePending(false)).action,'wait');
+  const startup=await backups.changePending(true);assert.equal(startup.action,'package');
+  const first=await backups.createLocal('change',undefined,startup.revision);assert.equal(first.job.status,'local_saved');
+  assert.equal((await backups.changePending(false)).job.id,first.job.id);
+  await create('month',35);
+  assert.equal((await backups.changePending(false)).action,'wait');
+  assert.equal((await db.query('SELECT status FROM backup_jobs WHERE id=$1',[first.job.id])).rows[0].status,'superseded');
+  const next=await backups.changePending(true),second=await backups.createLocal('change',undefined,next.revision);
+  await rm(second.job.filePath);const missing=await backups.changePending(true);assert.equal(missing.action,'package');
+  const replacement=await backups.createLocal('change',undefined,missing.revision);assert.notEqual(replacement.job.id,second.job.id);
+  await backups.markEmail(replacement.job.id,true);
+  assert.equal((await backups.changePending(false)).action,'none');
+  await call('/admin/backup/settings','PATCH',{directory:backupDir,senderEmail:'',recipientEmail:'',scheduleTime:'13:00',retentionCount:30});
 });
 
 test('Operation history flushes to monthly UTF-8 logs and is not exported',async()=>{

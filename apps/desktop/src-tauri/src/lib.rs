@@ -44,6 +44,7 @@ struct BackupJob {
     file_path: String,
     file_name: String,
     status: String,
+    data_revision: i64,
 }
 
 #[derive(Clone, Deserialize)]
@@ -64,6 +65,15 @@ struct RunResult {
 
 #[derive(Deserialize)]
 struct PendingResult {
+    job: Option<BackupJob>,
+    settings: BackupSettings,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChangePendingResult {
+    action: String,
+    revision: i64,
     job: Option<BackupJob>,
     settings: BackupSettings,
 }
@@ -91,8 +101,39 @@ fn pending(state: &DesktopState) -> Result<PendingResult, String> {
         .map_err(|e| e.to_string())
 }
 
-fn mark_email(state: &DesktopState, id: &str, ok: bool, error: &str) {
-    let _ = client().and_then(|c| {
+fn change_pending(state: &DesktopState, startup: bool) -> Result<ChangePendingResult, String> {
+    client()?
+        .get(format!(
+            "{}/api/desktop/backup/change-pending?startup={}",
+            state.base_url, startup
+        ))
+        .header("x-desktop-token", &state.token)
+        .send()
+        .map_err(|e| e.to_string())?
+        .error_for_status()
+        .map_err(|e| e.to_string())?
+        .json()
+        .map_err(|e| e.to_string())
+}
+
+fn backup_log(state: &DesktopState, event: &str, code: &str) {
+    let _ = fs::create_dir_all(&state.operation_log_directory);
+    let path = state.operation_log_directory.join(format!(
+        "backup-{}.log",
+        chrono::Local::now().format("%Y-%m")
+    ));
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        use std::io::Write;
+        let _ = writeln!(
+            file,
+            "{}",
+            json!({"time":Utc::now().to_rfc3339(),"event":event,"code":code})
+        );
+    }
+}
+
+fn mark_email(state: &DesktopState, id: &str, ok: bool, error: &str) -> Result<(), String> {
+    client().and_then(|c| {
         c.post(format!(
             "{}/api/desktop/backup/{}/email",
             state.base_url, id
@@ -101,8 +142,9 @@ fn mark_email(state: &DesktopState, id: &str, ok: bool, error: &str) {
         .json(&json!({"ok":ok,"error":error}))
         .send()
         .map_err(|e| e.to_string())
+        .and_then(|response| response.error_for_status().map_err(|e| e.to_string()))
         .map(|_| ())
-    });
+    })
 }
 
 fn smtp_password(sender: &str) -> Result<String, String> {
@@ -140,7 +182,7 @@ fn send_message(
         format!("悦体健身会员数据备份 {}", now.format("%Y/%m/%d %H:%M:%S"))
     };
     let text = if test {
-        "这是一封测试邮件。悦体健身Windows单机版已经可以使用QQ邮箱发送每日备份。".to_string()
+        "这是一封测试邮件。悦体健身Windows单机版已经可以发送完整数据备份。".to_string()
     } else {
         format!(
             "悦体健身会员数据已于 {}（北京时间）完成完整数据备份（包含会员头像）。附件可用于完整数据恢复。",
@@ -186,13 +228,92 @@ fn send_pending(state: &DesktopState) -> Result<bool, String> {
     };
     match send_message(&result.settings, Some(&job), false) {
         Ok(()) => {
-            mark_email(state, &job.id, true, "");
+            mark_email(state, &job.id, true, "")?;
             Ok(true)
         }
         Err(e) => {
-            mark_email(state, &job.id, false, &e);
+            let _ = mark_email(state, &job.id, false, &e);
             Err(e)
         }
+    }
+}
+
+fn send_change_job(state: &DesktopState, expected: &BackupJob) -> Result<(), String> {
+    // Check the durable revision at the last practical point before SMTP. This
+    // also protects jobs retried after a restart, not only freshly built ZIPs.
+    let current = change_pending(state, false)?;
+    let Some(job) = current.job else {
+        return Ok(());
+    };
+    if current.action != "send"
+        || job.id != expected.id
+        || job.data_revision != expected.data_revision
+    {
+        backup_log(state, "change.email", "superseded");
+        return Ok(());
+    }
+    match send_message(&current.settings, Some(&job), false) {
+        Ok(()) => {
+            mark_email(state, &job.id, true, "")?;
+            backup_log(state, "change.email", "ok");
+            Ok(())
+        }
+        Err(e) => {
+            let _ = mark_email(state, &job.id, false, &e);
+            backup_log(state, "change.email", "failed");
+            Err(e)
+        }
+    }
+}
+
+fn execute_change_backup(state: &DesktopState, revision: i64) -> Result<(), String> {
+    let result: RunResult = client()?
+        .post(format!("{}/api/desktop/backup/run", state.base_url))
+        .header("x-desktop-token", &state.token)
+        .json(&json!({"trigger":"change","expectedRevision":revision}))
+        .send()
+        .map_err(|e| e.to_string())?
+        .error_for_status()
+        .map_err(|e| e.to_string())?
+        .json()
+        .map_err(|e| e.to_string())?;
+    if result.job.status == "superseded" {
+        backup_log(state, "change.package", "superseded");
+        return Ok(());
+    }
+    backup_log(state, "change.package", "ok");
+    // Re-read the durable state immediately before SMTP so a newer business
+    // change can suppress this older attachment.
+    let current = change_pending(state, false)?;
+    if current.action == "send" {
+        if let Some(job) = current.job {
+            if job.id == result.job.id && job.data_revision == revision {
+                return send_change_job(state, &job);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn change_backup_check(state: &DesktopState, startup: bool) {
+    let result = match change_pending(state, startup) {
+        Ok(value) => value,
+        Err(_) => {
+            backup_log(state, "change.check", "failed");
+            return;
+        }
+    };
+    let outcome = match result.action.as_str() {
+        "package" => execute_change_backup(state, result.revision),
+        "send" => result
+            .job
+            .as_ref()
+            .map(|job| send_change_job(state, job))
+            .unwrap_or(Ok(())),
+        _ => Ok(()),
+    };
+    if outcome.is_err() {
+        backup_log(state, "change.result", "failed");
     }
 }
 
@@ -216,15 +337,18 @@ fn execute_backup(state: &DesktopState, trigger: &str) -> Result<String, String>
     if result.job.status == "sent" {
         return Ok(format!("{}（今天已备份）", result.job.file_name));
     }
+    if trigger == "automatic" {
+        return Ok(format!("{}（已保存到本地）", result.job.file_name));
+    }
     let settings = pending(state)?.settings;
     if !settings.sender_email.is_empty() {
         match send_message(&settings, Some(&result.job), false) {
             Ok(()) => {
-                mark_email(state, &result.job.id, true, "");
+                mark_email(state, &result.job.id, true, "")?;
                 Ok(format!("{}（邮件已发送）", result.job.file_name))
             }
             Err(e) => {
-                mark_email(state, &result.job.id, false, &e);
+                let _ = mark_email(state, &result.job.id, false, &e);
                 Err(e)
             }
         }
@@ -408,6 +532,7 @@ fn start_server(app: &tauri::AppHandle) -> Result<Arc<DesktopState>, String> {
 }
 
 fn automatic_check(state: &DesktopState, startup: bool) {
+    change_backup_check(state, startup);
     if let Ok(p) = pending(state) {
         if p.job.is_some() {
             if !p.settings.sender_email.is_empty() {
@@ -455,6 +580,8 @@ pub fn run() {
             hikvision::save_hikvision_settings,
             hikvision::test_hikvision_connection,
             hikvision::fetch_hikvision_avatar,
+            hikvision::preview_hikvision_validity,
+            hikvision::push_hikvision_validity,
             save_smtp_credential,
             test_backup_email,
             run_backup,

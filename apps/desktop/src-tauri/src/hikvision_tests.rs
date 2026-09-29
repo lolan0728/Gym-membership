@@ -24,6 +24,11 @@ impl Fixture {
         let s = stop.clone();
         let requests = Arc::new(Mutex::new(Vec::new()));
         let records = requests.clone();
+        let validity = Arc::new(Mutex::new((
+            "2026-01-01T00:00:00".to_string(),
+            "2026-12-31T23:59:59".to_string(),
+        )));
+        let validity_state = validity.clone();
         let handle = thread::spawn(move || {
             while !s.load(Ordering::Relaxed) {
                 match listener.accept() {
@@ -103,9 +108,10 @@ impl Fixture {
                                 "ambiguous" => "王13800138000 13900139000",
                                 _ => "王某某13800138000",
                             };
+                            let current = validity_state.lock().unwrap().clone();
                             let mut people = vec![
                                 json!({"employeeNo":"1","name":"无关913800138000"}),
-                                json!({"employeeNo":"7","name":name}),
+                                json!({"employeeNo":"7","name":name,"userType":"normal","Valid":{"enable":true,"beginTime":current.0,"endTime":current.1,"timeType":"local"}}),
                             ];
                             if mode == "duplicate" {
                                 people.push(json!({"employeeNo":"8","name":"李13800138000"}));
@@ -120,6 +126,26 @@ impl Fixture {
                             };
                             let value = json!({"UserInfoSearch":{"totalMatches":people.len(),"UserInfo":page}});
                             respond(&mut stream, 200, "", value.to_string().as_bytes());
+                        } else if path.contains("UserInfo/Modify") {
+                            assert_eq!(body["UserInfo"]["employeeNo"], "7");
+                            assert_eq!(body["UserInfo"]["userType"], "normal");
+                            assert_eq!(body["UserInfo"]["Valid"]["enable"], true);
+                            *validity_state.lock().unwrap() = (
+                                body["UserInfo"]["Valid"]["beginTime"]
+                                    .as_str()
+                                    .unwrap()
+                                    .to_string(),
+                                body["UserInfo"]["Valid"]["endTime"]
+                                    .as_str()
+                                    .unwrap()
+                                    .to_string(),
+                            );
+                            respond(
+                                &mut stream,
+                                200,
+                                "",
+                                json!({"statusCode":1}).to_string().as_bytes(),
+                            );
                         } else if path.contains("FDSearch") {
                             assert_eq!(body["FPID"], "7");
                             let id = if mode == "wrong-person" { "8" } else { "7" };
@@ -265,4 +291,23 @@ fn deadline_and_origin() {
     assert!(device.photo_url("http://example.invalid/p").is_err());
     assert!(device.photo_url("//user:pass@127.0.0.1/p").is_err());
     assert!(device.photo_url("/p").is_ok());
+}
+
+#[test]
+fn validity_write_and_read_back() {
+    let fixture = Fixture::new("success");
+    let device = fixture.device();
+    let photo = device.photo("13800138000").unwrap();
+    device
+        .modify_validity(&photo, "2027-01-02T00:00:00", "2027-12-30T23:59:59")
+        .unwrap();
+    device
+        .verify_validity("13800138000", "2027-01-02T00:00:00", "2027-12-30T23:59:59")
+        .unwrap();
+    assert!(fixture
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|p| p.contains("UserInfo/Modify")));
 }

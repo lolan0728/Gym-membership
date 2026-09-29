@@ -10,7 +10,7 @@ const root=resolve(desktop,'../..');
 const release=resolve(desktop,'src-tauri/target/release');
 const resources=resolve(desktop,'src-tauri/resources');
 const output=resolve(root,'output/windows');
-const folderName='悦体健身会员管理_1.6.0_便携版';
+const folderName='悦体健身会员管理_1.7.0_便携版';
 const folder=resolve(output,folderName);
 const archive=resolve(output,`${folderName}.zip`);
 const checksum=resolve(output,`${folderName}.sha256.txt`);
@@ -23,7 +23,7 @@ await mkdir(folder,{recursive:true});
 await cp(resolve(release,'joyfit-desktop.exe'),resolve(folder,'悦体健身会员管理.exe'));
 await cp(resources,resolve(folder,'resources'),{recursive:true});
 await writeFile(resolve(folder,'使用说明.txt'),[
-  '悦体健身会员管理 1.6.0 便携版',
+  '悦体健身会员管理 1.7.0 便携版',
   '',
   '1. 请先完整解压 ZIP 文件。',
   '2. 双击“悦体健身会员管理.exe”启动。',
@@ -31,7 +31,7 @@ await writeFile(resolve(folder,'使用说明.txt'),[
   '4. 会员数据和头像保存在当前 Windows 用户的本地应用数据目录，替换程序文件不会删除数据。',
   '5. 首次运行时按向导设置管理员密码、会员卡天数与备份信息。',
   '6. 每次完整关闭并重新启动后都需要输入管理员密码。',
-  '7. 自动备份每天最多发送一次；退出程序不会发送备份邮件。',
+  '7. 业务数据保存后静默10分钟，再生成最新完整ZIP并发送；静默期内退出时，下次启动立即生成并发送。每日定时本地备份继续保留。',
   '8. “统计报表”可以查看经营月报，并导出全部会员名单或月度经营PDF。',
   '9. 升级前请在旧版执行“立即完整备份”，完整退出旧程序，再将新版解压至新文件夹运行。',
   '10. 退卡按本次连续会员周期内的首次开卡和每次续卡分段估算；每段先扣付费天数、再扣赠送天数，暂停天数不计入使用。',
@@ -40,6 +40,7 @@ await writeFile(resolve(folder,'使用说明.txt'),[
   '13. 已暂停、续卡或退卡的数据请使用本版及更新版本管理，不要再用旧版程序打开。',
   '14. 系统设置新增“海康门禁”：填写设备密码并保存配置、测试连接。在会员头像处点击“从门禁取得”，根据手机号读取照片，裁剪后随会员资料保存。',
   '15. 门禁凭据仅保存在本机 Windows 凭据中，换电脑后须重新填写；门禁诊断日志为操作日志目录中的 hikvision-年月.log。',
+  '16. 新增、续费或修改可选择“保存并推送到门禁”；推送前必须人工核对管理系统头像和门禁照片。暂停、退卡和作废后可在会员详情中手动同步禁用。',
   ''
 ].join('\r\n'),'utf8');
 

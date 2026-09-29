@@ -30,13 +30,13 @@ export class PublicController {
   @Get('health') @Public() async health(){await this.db.query('SELECT 1');return {ok:true,desktop:desktopMode()};}
   @Get('setup/status') @Public() async setupStatus(){return {required:!(await this.db.query('SELECT 1 FROM administrators WHERE id=1')).rows.length};}
   @Post('setup') @Public() async setup(@Body()body:unknown){
-    const input=parse(settingsSchema.extend({password:z.string().min(8,'管理员密码至少 8 位').max(128),backupDirectory:z.string().trim().max(500).default(''),senderEmail:email.default(''),recipientEmail:email.default('')}),body);
+    const input=parse(settingsSchema.extend({password:z.string().min(6,'管理员密码至少 6 位').max(128),backupDirectory:z.string().trim().max(500).default(''),senderEmail:email.default(''),recipientEmail:email.default('')}),body);
     await this.db.tx(async q=>{
       if((await q.query('SELECT 1 FROM administrators WHERE id=1 FOR UPDATE')).rows.length)throw new BadRequestException('初始化已经完成');
       await q.query('INSERT INTO administrators(id,password_hash) VALUES(1,$1)',[await hashPassword(input.password)]);
       await q.query('UPDATE settings SET name=$1,phone=$2,month_card_days=$3,year_card_days=$4,updated_at=now() WHERE id=1',[input.name,input.phone,input.monthCardDays,input.yearCardDays]);
       if(input.backupDirectory||input.senderEmail||input.recipientEmail)await q.query('UPDATE backup_settings SET directory=$1,sender_email=$2,recipient_email=$3,updated_at=now() WHERE id=1',[input.backupDirectory,input.senderEmail,input.recipientEmail||input.senderEmail]);
-      await audit(q,'desktop_initialized',null,{name:input.name,phone:input.phone,monthCardDays:input.monthCardDays,yearCardDays:input.yearCardDays});
+      await audit(q,'desktop_initialized',null,{name:input.name,phone:input.phone,monthCardDays:input.monthCardDays,yearCardDays:input.yearCardDays},'owner',false);
     });return {ok:true};
   }
   @Get('store') @Public() async store(){const s=(await this.db.query('SELECT name,phone,month_card_days,year_card_days FROM settings WHERE id=1')).rows[0];return {name:s.name,phone:s.phone,monthCardDays:Number(s.month_card_days),yearCardDays:Number(s.year_card_days),hasLogo:true};}
@@ -49,7 +49,7 @@ export class AdminController {
   @Post('login') @Public() async login(@Body()body:unknown,@Req()req:Request,@Res({passthrough:true})res:Response){const {password}=parse(z.object({password:z.string().min(1).max(256)}).strict(),body);const token=await this.auth.login(password,req.ip||'unknown');res.cookie('gym_admin',token,cookieOptions());return {ok:true};}
   @Get('session') session(){return {name:'管理员',role:'owner'};}
   @Post('logout') async logout(@Req()req:AuthRequest,@Res({passthrough:true})res:Response){await this.db.query('DELETE FROM sessions WHERE token_hash=$1',[req.auth.tokenHash]);res.clearCookie('gym_admin',cookieOptions());return {ok:true};}
-  @Post('password') async password(@Body()body:unknown,@Req()req:AuthRequest,@Res({passthrough:true})res:Response){await this.auth.limit(`password:${req.auth.tokenHash}`,5,900);const input=parse(z.object({current:z.string().max(256),next:z.string().min(8,'新密码至少 8 位').max(128)}).strict(),body);await this.auth.password(input.current,input.next);res.clearCookie('gym_admin',cookieOptions());return {ok:true};}
+  @Post('password') async password(@Body()body:unknown,@Req()req:AuthRequest,@Res({passthrough:true})res:Response){await this.auth.limit(`password:${req.auth.tokenHash}`,5,900);const input=parse(z.object({current:z.string().max(256),next:z.string().min(6,'新密码至少 6 位').max(128)}).strict(),body);await this.auth.password(input.current,input.next);res.clearCookie('gym_admin',cookieOptions());return {ok:true};}
   @Get('stats') async stats(){await this.reminders.check();return this.members.stats();}
   @Get('notifications') notifications(){return this.reminders.list();}
   @Post('notifications/read') readNotifications(@Body()body:unknown){return this.reminders.read(parse(z.object({id:uuidSchema.optional()}).strict(),body).id);}
@@ -76,7 +76,7 @@ export class AdminController {
   @Get('imports') batches(){return this.imports.list();}
   @Get('settings') async settings(){const s=(await this.db.query('SELECT name,phone,month_card_days,year_card_days FROM settings WHERE id=1')).rows[0];return {name:s.name,phone:s.phone,monthCardDays:Number(s.month_card_days),yearCardDays:Number(s.year_card_days),hasLogo:true};}
   @Patch('settings') async settingsUpdate(@Body()body:unknown){const input=parse(settingsSchema,body);await this.db.tx(async q=>{await q.query('UPDATE settings SET name=$1,phone=$2,month_card_days=$3,year_card_days=$4,updated_at=now() WHERE id=1',[input.name,input.phone,input.monthCardDays,input.yearCardDays]);await audit(q,'settings_updated',null,input);});return {ok:true};}
-  @Post('settings/logo') @UseInterceptors(upload()) async logo(@UploadedFile()file:Express.Multer.File){const key=await this.storage.putLogo(fileBuffer(file));let old:string|null=null;try{await this.db.tx(async q=>{old=(await q.query('SELECT logo_key FROM settings WHERE id=1 FOR UPDATE')).rows[0].logo_key;await q.query('UPDATE settings SET logo_key=$1,updated_at=now() WHERE id=1',[key]);await audit(q,'logo_updated',null,{});});}catch(e){await this.storage.remove(key).catch(()=>{});throw e;}if(old)await this.storage.remove(old).catch(()=>Logger.warn('Old logo cleanup failed','Storage'));return {ok:true};}
+  @Post('settings/logo') @UseInterceptors(upload()) async logo(@UploadedFile()file:Express.Multer.File){const key=await this.storage.putLogo(fileBuffer(file));let old:string|null=null;try{await this.db.tx(async q=>{old=(await q.query('SELECT logo_key FROM settings WHERE id=1 FOR UPDATE')).rows[0].logo_key;await q.query('UPDATE settings SET logo_key=$1,updated_at=now() WHERE id=1',[key]);await audit(q,'logo_updated',null,{},'owner',false);});}catch(e){await this.storage.remove(key).catch(()=>{});throw e;}if(old)await this.storage.remove(old).catch(()=>Logger.warn('Old logo cleanup failed','Storage'));return {ok:true};}
   @Get('backup/settings') backupSettings(){return this.backups.settings();}
   @Patch('backup/settings') updateBackupSettings(@Body()body:unknown){return this.backups.updateSettings(parse(backupSettingsSchema,body));}
   @Post('backup/run') runBackup(){return this.backups.createLocal('manual');}
@@ -89,7 +89,8 @@ export class AdminController {
 export class DesktopController {
   constructor(@Inject(BackupsService)private backups:BackupsService){}
   private authorize(token:string|undefined){const expected=process.env.DESKTOP_CONTROL_TOKEN||'';if(!expected||!token)throw new BadRequestException('桌面控制凭证无效');const a=Buffer.from(expected),b=Buffer.from(token);if(a.length!==b.length||!timingSafeEqual(a,b))throw new BadRequestException('桌面控制凭证无效');}
-  @Post('backup/run') @Public() run(@Headers('x-desktop-token')token:string|undefined,@Body()body:unknown){this.authorize(token);const input=parse(z.object({trigger:z.enum(['manual','automatic']).default('manual'),scheduledDate:dateSchema.optional()}).strict(),body||{});return this.backups.createLocal(input.trigger,input.scheduledDate);}
+  @Post('backup/run') @Public() run(@Headers('x-desktop-token')token:string|undefined,@Body()body:unknown){this.authorize(token);const input=parse(z.object({trigger:z.enum(['manual','automatic','change']).default('manual'),scheduledDate:dateSchema.optional(),expectedRevision:z.number().int().nonnegative().optional()}).strict(),body||{});return this.backups.createLocal(input.trigger,input.scheduledDate,input.expectedRevision);}
   @Get('backup/pending') @Public() async pending(@Headers('x-desktop-token')token:string|undefined){this.authorize(token);return {job:await this.backups.automaticPending(),settings:await this.backups.settings()};}
+  @Get('backup/change-pending') @Public() async changePending(@Headers('x-desktop-token')token:string|undefined,@Query('startup')startup?:string){this.authorize(token);return this.backups.changePending(startup==='true');}
   @Post('backup/:id/email') @Public() mark(@Headers('x-desktop-token')token:string|undefined,@Param('id')id:string,@Body()body:unknown){this.authorize(token);const input=parse(z.object({ok:z.boolean(),error:z.string().max(1000).default('')}).strict(),body);return this.backups.markEmail(parse(uuidSchema,id),input.ok,input.error);}
 }

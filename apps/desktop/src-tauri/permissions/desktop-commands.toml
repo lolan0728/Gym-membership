@@ -6,6 +6,8 @@ commands.allow = [
   "save_hikvision_settings",
   "test_hikvision_connection",
   "fetch_hikvision_avatar",
+  "preview_hikvision_validity",
+  "push_hikvision_validity",
   "save_smtp_credential",
   "test_backup_email",
   "run_backup",

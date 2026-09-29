@@ -5,9 +5,10 @@ import { Db, Queryable } from './db.js';
 import { addDays, daysBetween, dateSchema, segmentedReturnEstimate, refundBasis, RefundSegmentInput, cardRemarkRequired, membershipDays, MembershipDurations, statusOf, todayShanghai } from './domain.js';
 import { beijingDay, beijingMonth } from './time.js';
 
-export async function audit(q:Queryable,action:string,memberId:string|null,detail:unknown,actor='owner') {
+export async function audit(q:Queryable,action:string,memberId:string|null,detail:unknown,actor='owner',businessChange=true) {
   await q.query('INSERT INTO audit_logs(id,member_id,action,actor,detail) VALUES($1,$2,$3,$4,$5)',[randomUUID(),memberId,action,actor,JSON.stringify(detail)]);
-  await q.query('UPDATE desktop_state SET data_revision=data_revision+1,updated_at=now() WHERE id=1');
+  if(businessChange)await q.query(`UPDATE desktop_state SET data_revision=data_revision+1,
+    pending_backup_revision=data_revision+1,pending_backup_at=now(),pending_backup_error='',updated_at=now() WHERE id=1`);
 }
 
 export async function membershipDurations(q:Queryable):Promise<MembershipDurations>{
@@ -333,7 +334,7 @@ export class MembersService {
       if(!(await q.query('SELECT id FROM members WHERE id=$1 FOR UPDATE',[id])).rows.length)throw new NotFoundException('会员不存在');
       const {rows}=await q.query('DELETE FROM wechat_bindings WHERE member_id=$1 RETURNING openid',[id]);
       if(rows[0])await q.query('DELETE FROM sessions WHERE openid=$1',[rows[0].openid]);
-      await audit(q,'binding_reset',id,{reason});return {ok:true};
+      await audit(q,'binding_reset',id,{reason},'owner',false);return {ok:true};
     });
   }
 
@@ -346,7 +347,7 @@ export class MembersService {
       if(!rows[0])throw new ForbiddenException('未找到可领取的会员卡，请联系前台核实登记手机号');
       if((await q.query('SELECT 1 FROM wechat_bindings WHERE member_id=$1',[rows[0].id])).rows.length)throw new ConflictException('未找到可领取的会员卡，请联系前台核实绑定信息');
       await q.query('INSERT INTO wechat_bindings(openid,member_id) VALUES($1,$2)',[auth.openid,rows[0].id]);
-      await audit(q,'wechat_bound',rows[0].id,{},'member');return {bound:true};
+      await audit(q,'wechat_bound',rows[0].id,{},'member',false);return {bound:true};
     });
   }
 

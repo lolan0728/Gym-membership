@@ -20,7 +20,7 @@
 | PUT /me/theme | `{theme:gold/blue/orange/white}`；微信网络接口使用 PUT |
 | POST /me/avatar、GET /me/avatar | 上传/读取本人头像；私有头像需会话，不能指定其他会员 |
 | GET /admin/session、POST /admin/logout | 当前管理员/注销 |
-| POST /admin/password | `{current,next}`；新密码至少 8 位、可使用纯数字，撤销全部管理员会话 |
+| POST /admin/password | `{current,next}`；新密码至少 6 位、可使用纯数字，撤销全部管理员会话 |
 | GET /admin/stats | 总会员、当前有效、即将到期、未绑定数；年卡提前 30 天、月卡提前 7 天 |
 | GET /admin/members | search/status/endFrom/endTo/expiring/page/pageSize，默认 10 条，最大 100 条；不支持卡种筛选 |
 | POST /admin/members | `{name,phone,note?,kind,startDate,endDate,cardRemark?}`；系统生成卡号，新增档案与初始卡片同一事务 |
@@ -80,3 +80,10 @@
 - `POST /admin/members/:id/avatar/remove`：JSON `{ "version": 当前会员版本 }`，同样防止覆盖并发更新。
 - Tauri 命令 `hikvision_settings`、`save_hikvision_settings`、`test_hikvision_connection`、`fetch_hikvision_avatar` 使用本机 Windows 凭据。读取命令接收当前表单手机号，返回照片字节、MIME 及剥离手机号后的设备姓名，从不返回密码。
 - Native 回归：`node apps/desktop/scripts/build-rust.mjs --test`。门禁 UI 回归：`node scripts/hikvision-ui-test.mjs`（模拟 Tauri 返回、真实隔离数据库）。通用回归：`npm test`、`npm run test:ui`。协议测试仅使用回环模拟设备，不访问门店门禁。
+
+## 桌面 v1.7.0：静默邮件备份与门禁有效期
+
+- 业务事务在增加 `desktop_state.data_revision` 的同时写入待备份版本和变更时间。桌面后台静默10分钟后调用 `POST /desktop/backup/run`，使用 `trigger=change` 和 `expectedRevision` 生成一致性快照。
+- `GET /desktop/backup/change-pending?startup=true|false` 返回 `none`、`wait`、`package` 或 `send`。生成ZIP后再次核对版本；旧附件标记为 `superseded`。邮件结果继续通过 `POST /desktop/backup/:id/email` 持久化。
+- Tauri 命令 `preview_hikvision_validity(phone)` 返回门禁照片、照片指纹、设备姓名和当前有效期；`push_hikvision_validity(phone,startDate,endDate,disabled,expectedPhotoFingerprint)` 重新核对照片，写入 `UserInfo.Valid` 并回读验证。
+- 禁用使用启用状态下的历史过期时间，避免海康 `Valid.enable=false` 被设备解释为长期有效。设备支持的日期范围为1970-01-01至2037-12-31。

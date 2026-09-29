@@ -17,8 +17,8 @@ async function api(path,body){const response=await fetch(base+'/api'+path,{metho
 try{
   let ready=false;for(let i=0;i<60;i++){try{if((await fetch(base+'/api/health')).ok){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,500));}
   assert.ok(ready,output);assert.equal((await api('/setup/status')).required,true);
-  await api('/setup',{name:'便携包隔离测试',phone:'',monthCardDays:30,yearCardDays:365,password:'12345678',backupDirectory:join(directory,'backups'),senderEmail:'',recipientEmail:''});
-  await api('/admin/login',{password:'12345678'});
+  await api('/setup',{name:'便携包隔离测试',phone:'',monthCardDays:30,yearCardDays:365,password:'123456',backupDirectory:join(directory,'backups'),senderEmail:'',recipientEmail:''});
+  await api('/admin/login',{password:'123456'});
   const date=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());const end=new Date(date+'T00:00:00Z');end.setUTCDate(end.getUTCDate()+30);
   const member=await api('/admin/members',{name:'打包验证',phone:'13911112222',kind:'month',startDate:date,endDate:end.toISOString().slice(0,10),note:'',cardRemark:''});
   await api('/admin/members/'+member.id+'/card/pause',{version:1,date,remark:'打包验证暂停'});
