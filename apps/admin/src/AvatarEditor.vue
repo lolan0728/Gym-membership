@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import {nextTick,onUnmounted,ref,watch} from 'vue';
-import {ElMessage} from 'element-plus';
+import {ElMessage,ElMessageBox} from 'element-plus';
 import {compatibleNames,normalizedName,hikvisionInvoke,isDesktop,type HikvisionOrigin,type HikvisionPhoto} from './hikvision';
 
 const props=defineProps<{src?:string;name:string;phone:string;active:boolean;saving:boolean}>();
@@ -116,6 +116,13 @@ function remove(){
   preview.value='';
   emit('change',null);
 }
+async function confirmRemove(){
+  const phone=props.phone;
+  try{
+    await ElMessageBox.confirm('确定移除当前头像吗？保存会员资料后才会生效。','确认移除头像',{confirmButtonText:'移除头像',cancelButtonText:'取消',type:'warning'});
+    if(props.active&&props.phone===phone&&!props.saving&&!busy.value)remove();
+  }catch{/* 取消时保留当前头像 */}
+}
 
 watch([zoom,x,y],draw);
 onUnmounted(()=>{
@@ -134,13 +141,9 @@ onUnmounted(()=>{
     @dragleave.prevent.self="dragActive=false"
     @drop.prevent="drop"
   >
-    <div v-if="desktop" class="avatar-editor-door">
-      <el-button class="avatar-door-button" type="primary" :loading="busy" :disabled="saving||!/^1[3-9]\d{9}$/.test(phone)" @click="fetchFromDoor">从门禁取得</el-button>
-      <small v-if="!/^1[3-9]\d{9}$/.test(phone)">请先填写正确的11位手机号</small>
-    </div>
     <button class="avatar-editor-image" :disabled="busy||saving" type="button" aria-label="选择会员头像" @click="input?.click()">
       <img v-if="!removed&&(preview||props.src)" :src="preview||props.src" alt="会员头像"/>
-      <span v-else class="avatar-placeholder">无头像</span>
+      <span v-else class="avatar-placeholder">无</span>
     </button>
     <div class="avatar-editor-copy">
       <b>{{dragActive?'松开即可添加照片':'会员头像（选填）'}}</b>
@@ -148,10 +151,10 @@ onUnmounted(()=>{
       <small>JPEG / PNG，最大 5 MB</small>
     </div>
     <div class="avatar-editor-actions">
+      <el-button v-if="desktop" class="avatar-door-button" type="primary" :loading="busy" :disabled="saving||!/^1[3-9]\d{9}$/.test(phone)" @click="fetchFromDoor">从门禁取得</el-button>
       <el-button :disabled="busy||saving" @click="input?.click()">选择照片</el-button>
-    </div>
-    <div v-if="!removed&&(preview||props.src)" class="avatar-editor-remove">
-      <el-button type="danger" plain :disabled="busy||saving" @click="remove">移除头像</el-button>
+      <small v-if="desktop&&!/^1[3-9]\d{9}$/.test(phone)">请先填写正确的11位手机号</small>
+      <el-button v-if="!removed&&(preview||props.src)" text :disabled="busy||saving" @click="confirmRemove">移除头像</el-button>
     </div>
     <input ref="input" type="file" accept="image/jpeg,image/png" hidden @change="choose"/>
   </div>
